@@ -1,0 +1,65 @@
+# CAN bus capture logs
+logs/
+*.log
+*_clean.log
+
+.devcontainer/
+
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+downloads/
+eggs/
+.eggs/
+
+# Editor directories and files
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Flash download tool
+managed_components/
+
+# IDF-specific
+idf_component_manager.lock
+
+# Test and coverage
+coverage/
+.coverage
+*.cover
+htmlcov/
+.pytest_cache/
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb

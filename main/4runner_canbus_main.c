@@ -1,284 +1,194 @@
 /*
- * 4Runner CAN Bus - Tire Pressure Monitor
+ * 4Runner CAN Bus - Tire Pressure Monitor (Passive)
  *
- * Reads tire pressure values from the 2018 Toyota 4Runner TPMS ECU
- * via UDS (Unified Diagnostic Services) over CAN bus.
+ * Passively listens to the 5th-gen Toyota 4Runner CAN bus and decodes the
+ * TPMS broadcast frame (CAN ID 0x0AA) rather than actively querying ECUs using
+ * OBD/UDS.
  *
  * Hardware: ESP32 with TJA1050 CAN transceiver
  * CAN Speed: 500 kbps
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/queue.h"
 #include "freertos/semphr.h"
+
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+
 #include "driver/twai.h"
 
+#include "4runner_can_decoder_verified.h"
+
 /* --------------------- Definitions and static variables ------------------ */
-#define TAG                     "4Runner CAN"
-#define TX_GPIO_NUM             15  // TJA1050 TXD
-#define RX_GPIO_NUM             16  // TJA1050 RXD
+#define TAG         "4Runner CAN"
+#define TX_GPIO_NUM 15 // TJA1050 TXD
+#define RX_GPIO_NUM 16 // TJA1050 RXD
 
-// TPMS ECU addresses
-#define TPMS_REQUEST_ID         0x750
-#define TPMS_RESPONSE_ID        0x758
-
-// UDS Service IDs
-#define UDS_READ_DATA_BY_ID     0x21
-#define UDS_POSITIVE_RESPONSE   0x61
-#define TPMS_PID                0x30
-
-// Polling interval (400ms = 2.5 Hz)
-#define TPMS_POLL_INTERVAL_MS   400
+// ✅ VERIFIED TPMS broadcast (see `4runner_can_decoder_verified.h`)
+#define TPMS_BROADCAST_ID 0x0AA
 
 // Task priorities
-#define TPMS_TASK_PRIO          5
-#define RX_TASK_PRIO            4
-#define STATUS_TASK_PRIO        3
+#define RX_TASK_PRIO     5
+#define STATUS_TASK_PRIO 4
 
 // Debug settings
-#define DEBUG_MODE              1  // Set to 1 for debug (log all CAN), 0 for TPMS only
+#define DEBUG_MODE 0 // 1=log all CAN frames; 0=TPMS focused
 
-/* --------------------- Tire Pressure Data Structure ---------------------- */
+// Print interval and staleness detection
+#define TPMS_PRINT_INTERVAL_MS 1000
+#define TPMS_STALE_TIMEOUT_MS  2500
+
 typedef struct {
-    float front_left_psi;
-    float front_right_psi;
-    float rear_left_psi;
-    float rear_right_psi;
-    float spare_psi;
+    tire_pressure_t pressures;
     bool valid;
-} tire_pressure_t;
+    int64_t last_update_us;
+} tpms_state_t;
 
-static tire_pressure_t tire_pressure = {0};
+static tpms_state_t tpms_state = {0};
 static SemaphoreHandle_t tpms_mutex;
 
 /* --------------------- TWAI Configuration -------------------------------- */
 static const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 static const twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
 static const twai_general_config_t g_config = {
-    .mode = TWAI_MODE_NORMAL,
+    .mode = TWAI_MODE_LISTEN_ONLY,
     .tx_io = TX_GPIO_NUM,
     .rx_io = RX_GPIO_NUM,
     .clkout_io = TWAI_IO_UNUSED,
     .bus_off_io = TWAI_IO_UNUSED,
     .tx_queue_len = 5,
-    .rx_queue_len = 20,
+    .rx_queue_len = 40,
     .alerts_enabled = TWAI_ALERT_NONE,
-    .clkout_divider = 0
+    .clkout_divider = 0,
 };
 
-/* --------------------- UDS Request Messages ------------------------------- */
-// UDS Start Diagnostic Session (service 0x10, default session 0x01)
-// Format: [extended_addr][length][service][session][padding...]
-static const twai_message_t diag_session_request = {
-    .identifier = TPMS_REQUEST_ID,
-    .data_length_code = 8,
-    .data = {0x2A, 0x02, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00}
-};
+static void format_can_data(const twai_message_t *msg, char *out, size_t out_len) {
+    // Produces something like: "01 02 03 04 05 06 07 08"
+    size_t written = 0;
+    for (int i = 0; i < msg->data_length_code && written + 3 < out_len; i++) {
+        int n = snprintf(out + written, out_len - written, "%02X%s", msg->data[i],
+                         (i + 1 == msg->data_length_code) ? "" : " ");
+        if (n < 0) {
+            break;
+        }
+        written += (size_t)n;
+    }
 
-// UDS request: Service 0x21, PID 0x30 with extended address
-// Format: [extended_addr][length][service][pid][padding...]
-static const twai_message_t tpms_request = {
-    .identifier = TPMS_REQUEST_ID,
-    .data_length_code = 8,
-    .data = {0x2A, 0x03, UDS_READ_DATA_BY_ID, TPMS_PID, 0x00, 0x00, 0x00, 0x00}
-};
-
-/* --------------------- Helper Functions ---------------------------------- */
-
-/**
- * Convert raw tire pressure byte to PSI
- * Formula from OBDb: (raw / 58.0) - 0.5 = bars, then convert to PSI
- */
-static float raw_to_psi(uint8_t raw) {
-    float bars = (raw / 58.0f) - 0.5f;
-    if (bars < 0) bars = 0;  // Clamp negative values
-    return bars * 14.5038f;  // Convert bars to PSI
+    if (written == 0 && out_len > 0) {
+        out[0] = '\0';
+    }
 }
 
-/**
- * Parse TPMS response and update tire pressure values
- * Response format: [ext_addr][length][0x61][0x30][FL][FR][RL][RR][SPARE]
- */
-static bool parse_tpms_response(const twai_message_t *msg) {
-    // Verify response ID
-    if (msg->identifier != TPMS_RESPONSE_ID) {
-        return false;
+static void handle_tpms_frame(const twai_message_t *msg) {
+    if (msg->identifier != TPMS_BROADCAST_ID || msg->data_length_code != 8) {
+        return;
     }
 
-    // Verify extended address and positive response
-    // data[0] = 0x2A (extended address)
-    // data[1] = length
-    // data[2] = 0x61 (positive response to 0x21)
-    // data[3] = 0x30 (PID)
-    if (msg->data[0] != 0x2A || msg->data[2] != UDS_POSITIVE_RESPONSE || msg->data[3] != TPMS_PID) {
-        return false;
-    }
+    tire_pressure_t decoded = decode_tire_pressure(msg->data);
 
-    // Extract tire pressure values (bytes 4-8)
     xSemaphoreTake(tpms_mutex, portMAX_DELAY);
-    tire_pressure.front_left_psi = raw_to_psi(msg->data[4]);
-    tire_pressure.front_right_psi = raw_to_psi(msg->data[5]);
-    tire_pressure.rear_left_psi = raw_to_psi(msg->data[6]);
-    tire_pressure.rear_right_psi = raw_to_psi(msg->data[7]);
-
-    // Spare tire might be in next message or not present
-    if (msg->data_length_code >= 8) {
-        tire_pressure.spare_psi = 0;  // Not in this frame
-    }
-    tire_pressure.valid = true;
+    tpms_state.pressures = decoded;
+    tpms_state.valid = true;
+    tpms_state.last_update_us = esp_timer_get_time();
     xSemaphoreGive(tpms_mutex);
-
-    return true;
 }
 
 /* --------------------- Tasks --------------------------------------------- */
 
-/**
- * General CAN receive task
- * Logs all CAN messages for debugging
- */
 static void can_receive_task(void *arg) {
+    (void)arg;
+
     twai_message_t rx_msg;
     uint32_t msg_count = 0;
-    uint32_t tx_count = 0;
-    TickType_t last_tx_time = 0;
 
-    ESP_LOGI(TAG, "CAN receive task started - logging all messages");
+#if DEBUG_MODE
+    ESP_LOGW(TAG, "*** DEBUG MODE: Logging all CAN frames ***");
+#else
+    ESP_LOGI(TAG, "Listening for TPMS broadcast (CAN ID 0x%03X)", TPMS_BROADCAST_ID);
+#endif
 
     while (1) {
-        // In debug mode, send diagnostic session + TPMS request every 2 seconds
-        if ((xTaskGetTickCount() - last_tx_time) >= pdMS_TO_TICKS(2000)) {
-            // First, start diagnostic session
-            esp_err_t err = twai_transmit(&diag_session_request, pdMS_TO_TICKS(100));
-            if (err == ESP_OK) {
-                ESP_LOGI(TAG, "TX[%lu] Diagnostic session 0x750 [2A 02 10 01]", tx_count);
-            } else {
-                ESP_LOGW(TAG, "TX diag session failed: %s", esp_err_to_name(err));
-            }
-
-            // Wait 50ms for session response
-            vTaskDelay(pdMS_TO_TICKS(50));
-
-            // Then send TPMS request
-            err = twai_transmit(&tpms_request, pdMS_TO_TICKS(100));
-            if (err == ESP_OK) {
-                tx_count++;
-                ESP_LOGI(TAG, "TX[%lu] TPMS request 0x750 [2A 03 21 30]", tx_count);
-            } else {
-                ESP_LOGW(TAG, "TX TPMS failed: %s", esp_err_to_name(err));
-            }
-            last_tx_time = xTaskGetTickCount();
-        }
-
-        if (twai_receive(&rx_msg, pdMS_TO_TICKS(10)) == ESP_OK) {
-            // Highlight TPMS-related messages
-            if (rx_msg.identifier == TPMS_RESPONSE_ID || rx_msg.identifier == TPMS_REQUEST_ID) {
-                ESP_LOGW(TAG, ">>> TPMS ID:0x%03lX DLC:%d Data:%02X %02X %02X %02X %02X %02X %02X %02X",
-                         rx_msg.identifier,
-                         rx_msg.data_length_code,
-                         rx_msg.data[0], rx_msg.data[1], rx_msg.data[2], rx_msg.data[3],
-                         rx_msg.data[4], rx_msg.data[5], rx_msg.data[6], rx_msg.data[7]);
-
-                // Check for negative response (service 0x7F)
-                if (rx_msg.data[0] == 0x2A && rx_msg.data[2] == 0x7F) {
-                    ESP_LOGE(TAG, "!!! Negative response: Service=0x%02X NRC=0x%02X",
-                             rx_msg.data[3], rx_msg.data[4]);
-                }
-            } else {
-                ESP_LOGI(TAG, "RX ID:0x%03lX DLC:%d Data:%02X %02X %02X %02X %02X %02X %02X %02X",
-                         rx_msg.identifier,
-                         rx_msg.data_length_code,
-                         rx_msg.data[0], rx_msg.data[1], rx_msg.data[2], rx_msg.data[3],
-                         rx_msg.data[4], rx_msg.data[5], rx_msg.data[6], rx_msg.data[7]);
-            }
+        if (twai_receive(&rx_msg, pdMS_TO_TICKS(100)) == ESP_OK) {
             msg_count++;
 
-            // Log message count every 100 messages
-            if (msg_count % 100 == 0) {
-                ESP_LOGI(TAG, "Received %lu CAN messages", msg_count);
+            handle_tpms_frame(&rx_msg);
+
+#if DEBUG_MODE
+            char data_str[3 * 8] = {0};
+            format_can_data(&rx_msg, data_str, sizeof(data_str));
+
+            if (rx_msg.identifier == TPMS_BROADCAST_ID) {
+                ESP_LOGW(TAG, "RX TPMS ID:0x%03lX DLC:%d Data:%s", rx_msg.identifier,
+                         rx_msg.data_length_code, data_str);
+            } else {
+                ESP_LOGI(TAG, "RX ID:0x%03lX DLC:%d Data:%s", rx_msg.identifier,
+                         rx_msg.data_length_code, data_str);
             }
+
+            if (msg_count % 1000 == 0) {
+                ESP_LOGI(TAG, "Received %lu CAN frames", msg_count);
+            }
+#endif
         }
 
-        // Yield every iteration to let other tasks run
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
-/**
- * TPMS polling task
- * Sends UDS request and waits for response, then logs tire pressures
- */
-static void tpms_task(void *arg) {
-    twai_message_t rx_msg;
-    TickType_t last_request_time = 0;
-
-    ESP_LOGI(TAG, "TPMS task started");
+static void tpms_status_task(void *arg) {
+    (void)arg;
 
     while (1) {
-        // Send TPMS request
-        esp_err_t err = twai_transmit(&tpms_request, pdMS_TO_TICKS(100));
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to send TPMS request: %s", esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(TPMS_PRINT_INTERVAL_MS));
+
+        tire_pressure_t pressures = {0};
+        bool valid = false;
+        int64_t last_update_us = 0;
+
+        xSemaphoreTake(tpms_mutex, portMAX_DELAY);
+        pressures = tpms_state.pressures;
+        valid = tpms_state.valid;
+        last_update_us = tpms_state.last_update_us;
+        xSemaphoreGive(tpms_mutex);
+
+        int64_t now_us = esp_timer_get_time();
+        int64_t age_ms = (last_update_us > 0) ? ((now_us - last_update_us) / 1000) : -1;
+
+        if (!valid || age_ms < 0 || age_ms > TPMS_STALE_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "No recent TPMS frames (age=%lld ms)", (long long)age_ms);
+            continue;
         }
 
-        last_request_time = xTaskGetTickCount();
-
-        // Wait for response (with timeout)
-        while ((xTaskGetTickCount() - last_request_time) < pdMS_TO_TICKS(100)) {
-            if (twai_receive(&rx_msg, pdMS_TO_TICKS(50)) == ESP_OK) {
-                if (parse_tpms_response(&rx_msg)) {
-                    // Successfully parsed TPMS response
-                    xSemaphoreTake(tpms_mutex, portMAX_DELAY);
-                    ESP_LOGI(TAG, "TPMS: FL=%.1f FR=%.1f RL=%.1f RR=%.1f SPARE=%.1f PSI",
-                             tire_pressure.front_left_psi,
-                             tire_pressure.front_right_psi,
-                             tire_pressure.rear_left_psi,
-                             tire_pressure.rear_right_psi,
-                             tire_pressure.spare_psi);
-                    xSemaphoreGive(tpms_mutex);
-                    break;
-                }
-            }
-        }
-
-        // Wait for next polling interval
-        vTaskDelayUntil(&last_request_time, pdMS_TO_TICKS(TPMS_POLL_INTERVAL_MS));
+        ESP_LOGI(TAG, "TPMS: FL=%.1f FR=%.1f RL=%.1f RR=%.1f PSI", pressures.front_left_psi,
+                 pressures.front_right_psi, pressures.rear_left_psi, pressures.rear_right_psi);
     }
 }
 
 /* --------------------- Main Application ---------------------------------- */
 
 void app_main(void) {
-    ESP_LOGI(TAG, "4Runner CAN Bus - Tire Pressure Monitor");
+    ESP_LOGI(TAG, "4Runner CAN Bus - TPMS Passive Decoder");
     ESP_LOGI(TAG, "TX GPIO: %d, RX GPIO: %d", TX_GPIO_NUM, RX_GPIO_NUM);
 
-    // Create mutex for tire pressure data
     tpms_mutex = xSemaphoreCreateMutex();
     if (tpms_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create mutex");
+        ESP_LOGE(TAG, "Failed to create TPMS mutex");
         return;
     }
 
-    // Install and start TWAI driver
     ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
     ESP_LOGI(TAG, "TWAI driver installed");
 
     ESP_ERROR_CHECK(twai_start());
     ESP_LOGI(TAG, "TWAI driver started");
 
-#if DEBUG_MODE
-    // Debug mode: log all CAN traffic
-    ESP_LOGW(TAG, "*** DEBUG MODE: Logging all CAN messages ***");
-    xTaskCreatePinnedToCore(can_receive_task, "CAN_RX", 4096, NULL, RX_TASK_PRIO, NULL, tskNO_AFFINITY);
-#else
-    // Normal mode: TPMS polling
-    xTaskCreatePinnedToCore(tpms_task, "TPMS", 4096, NULL, TPMS_TASK_PRIO, NULL, tskNO_AFFINITY);
-    ESP_LOGI(TAG, "Polling TPMS ECU at %.1f Hz...", 1000.0f / TPMS_POLL_INTERVAL_MS);
-#endif
+    xTaskCreatePinnedToCore(can_receive_task, "CAN_RX", 4096, NULL, RX_TASK_PRIO, NULL,
+                            tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(tpms_status_task, "TPMS_STATUS", 3072, NULL, STATUS_TASK_PRIO,
+                            NULL, tskNO_AFFINITY);
 }

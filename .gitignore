@@ -3,6 +3,7 @@ logs/
 *.log
 *_clean.log
 
+.cache
 .devcontainer/
 
 # ESP-IDF build output

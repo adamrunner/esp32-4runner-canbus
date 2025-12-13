@@ -1,3 +1,3 @@
-idf_component_register(SRCS "twai_network_example_listen_only_main.c"
+idf_component_register(SRCS "4runner_canbus_main.c"
                     REQUIRES driver
                     INCLUDE_DIRS ".")

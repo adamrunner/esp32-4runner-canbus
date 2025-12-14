@@ -1,9 +1,9 @@
 /*
- * 4Runner CAN Bus - Tire Pressure Monitor with WiFi WebSocket Streaming
+ * 4Runner CAN Bus - Tire Pressure Monitor (Passive)
  *
  * Passively listens to the 5th-gen Toyota 4Runner CAN bus and decodes the
- * TPMS broadcast frame (CAN ID 0x0AA). Data is streamed to connected WebSocket
- * clients via WiFi access point.
+ * TPMS broadcast frame (CAN ID 0x0AA) rather than actively querying ECUs using
+ * OBD/UDS.
  *
  * Hardware: ESP32 with TJA1050 CAN transceiver
  * CAN Speed: 500 kbps
@@ -23,24 +23,11 @@
 #include "driver/twai.h"
 
 #include "4runner_can_decoder_verified.h"
-#include "wifi_ap.h"
-#include "web_server.h"
-#include "can_data_router.h"
 
 /* --------------------- Definitions and static variables ------------------ */
 #define TAG "4Runner CAN"
-
-// Use Kconfig values or defaults for GPIO
-#ifndef CONFIG_CAN_TX_GPIO_NUM
-#define CONFIG_CAN_TX_GPIO_NUM 15
-#endif
-
-#ifndef CONFIG_CAN_RX_GPIO_NUM
-#define CONFIG_CAN_RX_GPIO_NUM 16
-#endif
-
-#define TX_GPIO_NUM CONFIG_CAN_TX_GPIO_NUM
-#define RX_GPIO_NUM CONFIG_CAN_RX_GPIO_NUM
+#define TX_GPIO_NUM 15 // TJA1050 TXD
+#define RX_GPIO_NUM 16 // TJA1050 RXD
 
 // TPMS broadcast CAN ID (verified)
 #define TPMS_BROADCAST_ID 0x0AA
@@ -102,17 +89,13 @@ static void can_receive_task(void *arg)
 
     twai_message_t rx_msg;
 
-    ESP_LOGI(TAG, "CAN receive task started");
+    ESP_LOGI(TAG, "Listening for TPMS broadcast (CAN ID 0x%03X)", TPMS_BROADCAST_ID);
 
     while (1)
     {
         if (twai_receive(&rx_msg, pdMS_TO_TICKS(100)) == ESP_OK)
         {
-            // Always process TPMS frames to update state
             handle_tpms_frame(&rx_msg);
-
-            // Route frame to WebSocket clients (based on current mode)
-            can_data_router_process_frame(&rx_msg);
         }
 
         vTaskDelay(pdMS_TO_TICKS(1));
@@ -122,8 +105,6 @@ static void can_receive_task(void *arg)
 static void tpms_status_task(void *arg)
 {
     (void)arg;
-
-    ESP_LOGI(TAG, "TPMS status task started");
 
     while (1)
     {
@@ -144,26 +125,15 @@ static void tpms_status_task(void *arg)
 
         if (!valid || age_ms < 0 || age_ms > TPMS_STALE_TIMEOUT_MS)
         {
-            // Only log to serial if no WebSocket client connected
-            if (!can_data_router_has_client())
-            {
-                ESP_LOGW(TAG, "No recent TPMS frames (age=%lld ms)", (long long)age_ms);
-            }
+            ESP_LOGW(TAG, "No recent TPMS frames (age=%lld ms)", (long long)age_ms);
             continue;
         }
 
-        // Send TPMS data to WebSocket clients
-        can_data_router_send_tpms(&pressures, now_us);
-
-        // Only log to serial if no WebSocket client connected
-        if (!can_data_router_has_client())
-        {
-            ESP_LOGI(TAG, "TPMS: FL=%.1f FR=%.1f RL=%.1f RR=%.1f PSI",
-                     pressures.front_left_psi,
-                     pressures.front_right_psi,
-                     pressures.rear_left_psi,
-                     pressures.rear_right_psi);
-        }
+        ESP_LOGI(TAG, "TPMS: FL=%.1f FR=%.1f RL=%.1f RR=%.1f PSI",
+                 pressures.front_left_psi,
+                 pressures.front_right_psi,
+                 pressures.rear_left_psi,
+                 pressures.rear_right_psi);
     }
 }
 
@@ -171,10 +141,9 @@ static void tpms_status_task(void *arg)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "4Runner CAN Bus - TPMS Passive Decoder with WiFi");
+    ESP_LOGI(TAG, "4Runner CAN Bus - TPMS Passive Decoder");
     ESP_LOGI(TAG, "TX GPIO: %d, RX GPIO: %d", TX_GPIO_NUM, RX_GPIO_NUM);
 
-    // Create TPMS mutex
     tpms_mutex = xSemaphoreCreateMutex();
     if (tpms_mutex == NULL)
     {
@@ -182,43 +151,14 @@ void app_main(void)
         return;
     }
 
-    // Initialize CAN data router
-    if (can_data_router_init() != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Failed to initialize CAN data router");
-        return;
-    }
-
-    // Initialize WiFi AP
-    if (wifi_ap_init() != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Failed to initialize WiFi AP");
-        return;
-    }
-
-    ESP_LOGI(TAG, "WiFi AP started: %s", wifi_ap_get_ip());
-    ESP_LOGI(TAG, "Connect to http://%s.local or http://%s",
-             wifi_ap_get_hostname(), wifi_ap_get_ip());
-
-    // Start web server
-    if (web_server_start() != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Failed to start web server");
-        return;
-    }
-
-    // Install and start TWAI driver
     ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
     ESP_LOGI(TAG, "TWAI driver installed");
 
     ESP_ERROR_CHECK(twai_start());
     ESP_LOGI(TAG, "TWAI driver started");
 
-    // Create tasks
     xTaskCreatePinnedToCore(can_receive_task, "CAN_RX", 4096, NULL,
                             RX_TASK_PRIO, NULL, tskNO_AFFINITY);
     xTaskCreatePinnedToCore(tpms_status_task, "TPMS_STATUS", 3072, NULL,
                             STATUS_TASK_PRIO, NULL, tskNO_AFFINITY);
-
-    ESP_LOGI(TAG, "System initialized successfully");
 }

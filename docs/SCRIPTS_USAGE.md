@@ -1,8 +1,10 @@
 # CAN Log Analysis Scripts Usage Guide
 
-Python analysis tools live in the `scripts/` directory for analyzing and validating CAN bus captures from the 4Runner project.
+Python analysis tools live in the `scripts/` directory for analyzing and validating CAN bus captures from the 4Runner project. They accept both the original text logs and the new CSV format (`timestamp_us,can_id,dlc,byte0..byte7`).
 
 ## Scripts Overview
+
+> Binary logs: You can convert CSV logs to a compact binary format (19-byte records) with `scripts/convert_csv_to_bin.py` and feed the `.bin` file to all scripts. The tools auto-detect text/CSV vs `.bin`.
 
 ### 1. decode_with_obdb.py - Enhanced OBDb Decoder ⭐ RECOMMENDED
 Advanced decoder that integrates Toyota 4Runner OBDb database for accurate signal decoding.

@@ -6,6 +6,8 @@ Validates CAN message captures and provides statistics
 
 import re
 import sys
+import csv
+import struct
 from collections import defaultdict, Counter
 from pathlib import Path
 
@@ -53,6 +55,53 @@ class CANValidator:
 
         return None, "No CAN pattern match"
 
+    def parse_csv_row(self, row):
+        try:
+            can_id = int(str(row.get('can_id', '')).strip(), 16)
+            dlc = int(row.get('dlc', 0))
+        except Exception:
+            return None, "CSV parse error"
+
+        data_bytes = []
+        for i in range(8):
+            val = str(row.get(f'byte{i}', '')).strip()
+            if val == '':
+                data_bytes.append(0)
+                continue
+            try:
+                data_bytes.append(int(val, 16))
+            except ValueError:
+                try:
+                    data_bytes.append(int(val))
+                except ValueError:
+                    data_bytes.append(0)
+
+        if dlc > 8:
+            return None, f"Invalid DLC: {dlc}"
+
+        return {
+            'id': can_id,
+            'dlc': dlc,
+            'data': data_bytes[:dlc],
+            'raw_line': None
+        }, None
+
+    def parse_bin_records(self):
+        record_struct = struct.Struct('<QHB8B')
+        with open(self.log_file, 'rb') as f:
+            while True:
+                chunk = f.read(record_struct.size)
+                if len(chunk) < record_struct.size:
+                    break
+                _, can_id, dlc, *data_bytes = record_struct.unpack(chunk)
+                msg = {
+                    'id': can_id,
+                    'dlc': dlc,
+                    'data': data_bytes[:dlc],
+                    'raw_line': None
+                }
+                yield msg, None
+
     def validate(self):
         """Validate the log file"""
         print(f"Validating: {self.log_file}")
@@ -62,26 +111,60 @@ class CANValidator:
             print(f"❌ Error: File not found: {self.log_file}")
             return False
 
-        with open(self.log_file, 'r', encoding='utf-8', errors='ignore') as f:
-            for line_num, line in enumerate(f, 1):
+        if self.log_file.suffix.lower() == '.bin':
+            for line_num, (msg, error) in enumerate(self.parse_bin_records(), 1):
                 self.stats['total_lines'] += 1
-
-                # Skip empty lines and ESP-IDF boot messages
-                if not line.strip() or 'ID:' not in line:
-                    continue
-
-                msg, error = self.parse_can_message(line)
-
                 if msg:
                     self.messages.append(msg)
                     self.stats['valid_can_messages'] += 1
                     self.stats['unique_ids'].add(msg['id'])
                     self.stats['id_counts'][msg['id']] += 1
                     self.stats['dlc_distribution'][msg['dlc']] += 1
-                elif 'ID:' in line and 'DLC:' in line:  # Looks like CAN but failed to parse
+                else:
                     self.stats['invalid_messages'] += 1
-                    if len(self.stats['parse_errors']) < 10:  # Keep first 10 errors
-                        self.stats['parse_errors'].append((line_num, error, line.strip()))
+                    if len(self.stats['parse_errors']) < 10:
+                        self.stats['parse_errors'].append((line_num, error, None))
+        else:
+            with open(self.log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                first_line = f.readline()
+                f.seek(0)
+
+                if first_line.lower().startswith('timestamp_us'):
+                    reader = csv.DictReader(f)
+                    for line_num, row in enumerate(reader, 1):
+                        self.stats['total_lines'] += 1
+                        msg, error = self.parse_csv_row(row)
+
+                        if msg:
+                            self.messages.append(msg)
+                            self.stats['valid_can_messages'] += 1
+                            self.stats['unique_ids'].add(msg['id'])
+                            self.stats['id_counts'][msg['id']] += 1
+                            self.stats['dlc_distribution'][msg['dlc']] += 1
+                        else:
+                            self.stats['invalid_messages'] += 1
+                            if len(self.stats['parse_errors']) < 10:
+                                self.stats['parse_errors'].append((line_num, error, row))
+                else:
+                    for line_num, line in enumerate(f, 1):
+                        self.stats['total_lines'] += 1
+
+                        # Skip empty lines and ESP-IDF boot messages
+                        if not line.strip() or 'ID:' not in line:
+                            continue
+
+                        msg, error = self.parse_can_message(line)
+
+                        if msg:
+                            self.messages.append(msg)
+                            self.stats['valid_can_messages'] += 1
+                            self.stats['unique_ids'].add(msg['id'])
+                            self.stats['id_counts'][msg['id']] += 1
+                            self.stats['dlc_distribution'][msg['dlc']] += 1
+                        elif 'ID:' in line and 'DLC:' in line:  # Looks like CAN but failed to parse
+                            self.stats['invalid_messages'] += 1
+                            if len(self.stats['parse_errors']) < 10:  # Keep first 10 errors
+                                self.stats['parse_errors'].append((line_num, error, line.strip()))
 
         return True
 

@@ -6,6 +6,8 @@ Decodes and analyzes specific CAN IDs from Toyota 4Runner
 
 import re
 import sys
+import csv
+import struct
 from collections import defaultdict, Counter
 from pathlib import Path
 
@@ -70,6 +72,47 @@ class CANDecoder:
                 'data': data_bytes[:dlc]
             }
         return None
+
+    def parse_csv_row(self, row):
+        try:
+            can_id = int(str(row.get('can_id', '')).strip(), 16)
+            dlc = int(row.get('dlc', 0))
+        except Exception:
+            return None
+
+        data_bytes = []
+        for i in range(8):
+            val = row.get(f'byte{i}', '').strip()
+            if val == '':
+                data_bytes.append(0)
+                continue
+            try:
+                data_bytes.append(int(val, 16))
+            except ValueError:
+                try:
+                    data_bytes.append(int(val))
+                except ValueError:
+                    data_bytes.append(0)
+
+        return {
+            'id': can_id,
+            'dlc': dlc,
+            'data': data_bytes[:dlc]
+        }
+
+    def parse_bin_records(self):
+        record_struct = struct.Struct('<QHB8B')
+        with open(self.log_file, 'rb') as f:
+            while True:
+                chunk = f.read(record_struct.size)
+                if len(chunk) < record_struct.size:
+                    break
+                _, can_id, dlc, *data_bytes = record_struct.unpack(chunk)
+                yield {
+                    'id': can_id,
+                    'dlc': dlc,
+                    'data': data_bytes[:dlc]
+                }
 
     def decode_wheel_speed(self, data):
         """Decode wheel speed from 0x0AA (tentative)"""
@@ -159,14 +202,28 @@ class CANDecoder:
             print(f"❌ Error: File not found: {self.log_file}")
             return False
 
-        with open(self.log_file, 'r', encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                if 'ID:' not in line:
-                    continue
+        if self.log_file.suffix.lower() == '.bin':
+            for msg in self.parse_bin_records():
+                self.messages_by_id[msg['id']].append(msg)
+        else:
+            with open(self.log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                first_line = f.readline()
+                f.seek(0)
 
-                msg = self.parse_can_message(line)
-                if msg:
-                    self.messages_by_id[msg['id']].append(msg)
+                if first_line.lower().startswith('timestamp_us'):
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        msg = self.parse_csv_row(row)
+                        if msg:
+                            self.messages_by_id[msg['id']].append(msg)
+                else:
+                    for line in f:
+                        if 'ID:' not in line:
+                            continue
+
+                        msg = self.parse_can_message(line)
+                        if msg:
+                            self.messages_by_id[msg['id']].append(msg)
 
         return True
 

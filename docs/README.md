@@ -31,7 +31,7 @@ This project uses an ESP32-S3 microcontroller to passively listen to the CAN bus
 ./capture_can.sh
 ```
 
-Press `Ctrl+]` to stop capturing. The log will be saved to `logs/can_capture_YYYYMMDD_HHMMSS.log`.
+Press `Ctrl+]` to stop capturing. Logs now save as CSV (`timestamp_us,can_id,dlc,byte0..byte7`) like `logs/LOG_0001.CSV`. For faster analysis, convert to binary with `./scripts/convert_csv_to_bin.py logs/LOG_0001.CSV` and use the `.bin` file with the scripts.
 
 ### 2. Analyze the Data
 

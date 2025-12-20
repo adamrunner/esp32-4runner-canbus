@@ -5,6 +5,7 @@ logs/
 
 .devcontainer/
 .cache/
+tmp/
 
 # ESP-IDF build output
 build/

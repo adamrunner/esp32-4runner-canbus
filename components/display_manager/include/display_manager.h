@@ -1,16 +1,14 @@
 /*
- * Display Manager - Abstraction layer for LVGL/ESP-IDF SH8601 driver
+ * Display Manager - Abstraction layer for LVGL/ESP-IDF RGB panel driver
  *
  * This component provides a page-based UI system for ESP32 displays.
  */
 
 #pragma once
 
+#include <stdbool.h>
+
 #include "lvgl.h"
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_ops.h"
-#include "esp_lcd_panel_vendor.h"
-#include "driver/spi_master.h"
 
 // Forward declaration
 typedef struct dm_page dm_page_t;
@@ -27,33 +25,42 @@ extern "C" {
 
 // Configuration structure for display initialization
 typedef struct {
-    // SPI configuration
-    spi_host_device_t spi_host;
-    int dma_chan;
-    int sclk_io_num;
-    int mosi_io_num;
-    int miso_io_num;
-
-    // LCD pin configuration
-    int dc_io_num;
-    int cs_io_num;
-    int rst_io_num;
-    int bk_light_io_num;
-
     // LCD specifications
     int h_res;
     int v_res;
     int pixel_clock_hz;
-    int cmd_bits;
-    int param_bits;
+    int hsync_pulse_width;
+    int hsync_back_porch;
+    int hsync_front_porch;
+    int vsync_pulse_width;
+    int vsync_back_porch;
+    int vsync_front_porch;
+    int data_width;
+    int bits_per_pixel;
+    int num_fbs;
+    int bounce_buffer_size_px;
+    bool fb_in_psram;
+
+    // LCD pin configuration
+    int hsync_io_num;
+    int vsync_io_num;
+    int de_io_num;
+    int pclk_io_num;
+    int disp_io_num;
+    int data_io_nums[16];
+
+    // Touch/I2C configuration
+    int i2c_port;
+    int i2c_sda_io_num;
+    int i2c_scl_io_num;
+    int i2c_freq_hz;
+    int touch_reset_io_num;
+    int touch_int_io_num;
+    bool touch_enabled;
 
     // LVGL configuration
     int draw_buf_lines;
     int tick_period_ms;
-
-    // Backlight configuration
-    int bk_light_on_level;
-    int bk_light_off_level;
 
     // Panel orientation and offsets
     display_orientation_t orientation;

@@ -2,7 +2,7 @@
  * 4Runner CAN Bus Display
  *
  * Polls OBD-II and Toyota-specific PIDs over CAN and displays metrics
- * on the Waveshare ESP32-S3-LCD-1.9 panel using LVGL.
+ * on the Waveshare ESP32-S3 4.3-inch Touch LCD using LVGL.
  */
 
 #include <stdint.h>
@@ -11,7 +11,6 @@
 #include <string.h>
 
 #include <freertos/FreeRTOS.h>
-#include <freertos/event_groups.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <driver/gpio.h>
@@ -19,23 +18,63 @@
 #include <esp_err.h>
 #include <esp_log.h>
 
-#include "button_bsp.h"
 #include "display_manager.h"
 #include "display_manager/page.h"
 #include "lvgl.h"
 
 static const char *TAG = "4RUNNER_CAN";
 
-#define TX_GPIO_NUM GPIO_NUM_17
+#define TX_GPIO_NUM GPIO_NUM_15
 #define RX_GPIO_NUM GPIO_NUM_16
 
 #define OBD_REQUEST_ID 0x7E0
 #define OBD_RESPONSE_ID 0x7E8
 
-#define BUTTON_EVENT_NEXT (1 << 0)
-#define BUTTON_EVENT_ALT (1 << 1)
-
 #define OBD_POLL_INTERVAL_MS 150
+
+static const int lcd_h_res = 800;
+static const int lcd_v_res = 480;
+static const int lcd_pixel_clock_hz = 16 * 1000 * 1000;
+static const int lcd_hsync_pulse_width = 4;
+static const int lcd_hsync_back_porch = 8;
+static const int lcd_hsync_front_porch = 8;
+static const int lcd_vsync_pulse_width = 4;
+static const int lcd_vsync_back_porch = 8;
+static const int lcd_vsync_front_porch = 8;
+static const int lcd_data_width = 16;
+static const int lcd_bits_per_pixel = 16;
+static const int lcd_num_fbs = 2;
+static const int lcd_bounce_buffer_size_px = 0;
+static const bool lcd_fb_in_psram = true;
+static const int lcd_hsync_io_num = GPIO_NUM_46;
+static const int lcd_vsync_io_num = GPIO_NUM_3;
+static const int lcd_de_io_num = GPIO_NUM_5;
+static const int lcd_pclk_io_num = GPIO_NUM_7;
+static const int lcd_disp_io_num = -1;
+static const int lcd_data_io_nums[16] = {
+    GPIO_NUM_14,
+    GPIO_NUM_38,
+    GPIO_NUM_18,
+    GPIO_NUM_17,
+    GPIO_NUM_10,
+    GPIO_NUM_39,
+    GPIO_NUM_0,
+    GPIO_NUM_45,
+    GPIO_NUM_48,
+    GPIO_NUM_47,
+    GPIO_NUM_21,
+    GPIO_NUM_1,
+    GPIO_NUM_2,
+    GPIO_NUM_42,
+    GPIO_NUM_41,
+    GPIO_NUM_40,
+};
+static const int lcd_i2c_port = 0;
+static const int lcd_i2c_sda_io_num = 8;
+static const int lcd_i2c_scl_io_num = 9;
+static const int lcd_i2c_freq_hz = 400000;
+static const int lcd_touch_reset_io_num = 4;
+static const int lcd_touch_int_io_num = -1;
 
 typedef struct {
     float rpm;
@@ -94,6 +133,33 @@ static const twai_general_config_t g_config = {
 
 static display_manager_handle_t s_display = NULL;
 static int s_page_count = 0;
+static int s_active_page = 0;
+
+static const lv_color_t k_bg_color = lv_color_hex(0x0f1115);
+static const lv_color_t k_text_color = lv_color_hex(0xe6e6e6);
+
+static void apply_dark_theme(lv_obj_t *container)
+{
+    if (!container) {
+        return;
+    }
+
+    lv_obj_set_style_bg_color(container, k_bg_color, 0);
+    lv_obj_set_style_bg_opa(container, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(container, k_text_color, 0);
+}
+
+static void page_tap_event_cb(lv_event_t *e)
+{
+    (void)e;
+
+    if (!s_display || s_page_count <= 1) {
+        return;
+    }
+
+    s_active_page = (s_active_page + 1) % s_page_count;
+    display_manager_switch_to_page(s_display, s_active_page);
+}
 
 static void metrics_get_snapshot(can_metrics_t *out)
 {
@@ -285,16 +351,24 @@ static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_set_style_pad_all(page->container, 6, 0);
     lv_obj_set_style_pad_row(page->container, 8, 0);
     lv_obj_set_style_border_width(page->container, 0, 0);
+    apply_dark_theme(page->container);
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(page->container, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(page->container, page_tap_event_cb, LV_EVENT_SHORT_CLICKED, NULL);
 
     lv_obj_t *title = lv_label_create(page->container);
     lv_label_set_text(title, "Diagnostics");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(title, k_text_color, 0);
 
     data->rpm_label = lv_label_create(page->container);
     data->vbatt_label = lv_label_create(page->container);
     data->iat_label = lv_label_create(page->container);
     data->baro_label = lv_label_create(page->container);
+    lv_obj_set_style_text_color(data->rpm_label, k_text_color, 0);
+    lv_obj_set_style_text_color(data->vbatt_label, k_text_color, 0);
+    lv_obj_set_style_text_color(data->iat_label, k_text_color, 0);
+    lv_obj_set_style_text_color(data->baro_label, k_text_color, 0);
 
     page->is_created = true;
 }
@@ -378,15 +452,22 @@ static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_set_style_pad_all(page->container, 6, 0);
     lv_obj_set_style_pad_row(page->container, 8, 0);
     lv_obj_set_style_border_width(page->container, 0, 0);
+    apply_dark_theme(page->container);
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(page->container, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(page->container, page_tap_event_cb, LV_EVENT_SHORT_CLICKED, NULL);
 
     lv_obj_t *title = lv_label_create(page->container);
     lv_label_set_text(title, "4Runner Data");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(title, k_text_color, 0);
 
     data->atf_label = lv_label_create(page->container);
     data->gear_label = lv_label_create(page->container);
     data->odo_label = lv_label_create(page->container);
+    lv_obj_set_style_text_color(data->atf_label, k_text_color, 0);
+    lv_obj_set_style_text_color(data->gear_label, k_text_color, 0);
+    lv_obj_set_style_text_color(data->odo_label, k_text_color, 0);
 
     page->is_created = true;
 }
@@ -466,36 +547,6 @@ static dm_page_t *fourrunner_page_create(void)
     );
 }
 
-static void ui_button_task(void *arg)
-{
-    (void)arg;
-    int page_index = 0;
-
-    if (s_page_count == 0) {
-        ESP_LOGW(TAG, "No pages registered, button task idle");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    ESP_LOGI(TAG, "Button task started");
-
-    while (1) {
-        EventBits_t bits = xEventGroupWaitBits(
-            key_groups,
-            BUTTON_EVENT_NEXT | BUTTON_EVENT_ALT,
-            pdTRUE,
-            pdFALSE,
-            portMAX_DELAY
-        );
-
-        if (bits & (BUTTON_EVENT_NEXT | BUTTON_EVENT_ALT)) {
-            page_index = (page_index + 1) % s_page_count;
-            display_manager_switch_to_page(s_display, page_index);
-            ESP_LOGI(TAG, "Switched to page %d", page_index);
-        }
-    }
-}
-
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "4Runner CAN Bus Display starting");
@@ -514,28 +565,40 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "TWAI driver started");
 
     display_config_t display_config = {
-        .spi_host = SPI3_HOST,
-        .dma_chan = SPI_DMA_CH_AUTO,
-        .sclk_io_num = 10,
-        .mosi_io_num = 13,
-        .miso_io_num = -1,
-        .dc_io_num = 11,
-        .cs_io_num = 12,
-        .rst_io_num = 9,
-        .bk_light_io_num = 14,
-        .h_res = 170,
-        .v_res = 320,
-        .pixel_clock_hz = 20 * 1000 * 1000,
-        .cmd_bits = 8,
-        .param_bits = 8,
-        .draw_buf_lines = 20,
+        .h_res = lcd_h_res,
+        .v_res = lcd_v_res,
+        .pixel_clock_hz = lcd_pixel_clock_hz,
+        .hsync_pulse_width = lcd_hsync_pulse_width,
+        .hsync_back_porch = lcd_hsync_back_porch,
+        .hsync_front_porch = lcd_hsync_front_porch,
+        .vsync_pulse_width = lcd_vsync_pulse_width,
+        .vsync_back_porch = lcd_vsync_back_porch,
+        .vsync_front_porch = lcd_vsync_front_porch,
+        .data_width = lcd_data_width,
+        .bits_per_pixel = lcd_bits_per_pixel,
+        .num_fbs = lcd_num_fbs,
+        .bounce_buffer_size_px = lcd_bounce_buffer_size_px,
+        .fb_in_psram = lcd_fb_in_psram,
+        .hsync_io_num = lcd_hsync_io_num,
+        .vsync_io_num = lcd_vsync_io_num,
+        .de_io_num = lcd_de_io_num,
+        .pclk_io_num = lcd_pclk_io_num,
+        .disp_io_num = lcd_disp_io_num,
+        .data_io_nums = {0},
+        .i2c_port = lcd_i2c_port,
+        .i2c_sda_io_num = lcd_i2c_sda_io_num,
+        .i2c_scl_io_num = lcd_i2c_scl_io_num,
+        .i2c_freq_hz = lcd_i2c_freq_hz,
+        .touch_reset_io_num = lcd_touch_reset_io_num,
+        .touch_int_io_num = lcd_touch_int_io_num,
+        .touch_enabled = true,
+        .draw_buf_lines = 40,
         .tick_period_ms = 2,
-        .bk_light_on_level = 0,
-        .bk_light_off_level = 1,
         .orientation = DISPLAY_ORIENTATION_LANDSCAPE,
         .x_offset = 0,
-        .y_offset = 35
+        .y_offset = 0
     };
+    memcpy(display_config.data_io_nums, lcd_data_io_nums, sizeof(lcd_data_io_nums));
 
     s_display = display_manager_init(&display_config);
     if (!s_display) {
@@ -557,12 +620,10 @@ extern "C" void app_main(void)
     }
 
     if (s_page_count > 0) {
-        display_manager_switch_to_page(s_display, 0);
+        s_active_page = 0;
+        display_manager_switch_to_page(s_display, s_active_page);
     }
-
-    button_Init();
 
     xTaskCreatePinnedToCore(can_rx_task, "CAN_RX", 4096, NULL, 5, NULL, tskNO_AFFINITY);
     xTaskCreatePinnedToCore(can_tx_task, "CAN_TX", 4096, NULL, 4, NULL, tskNO_AFFINITY);
-    xTaskCreatePinnedToCore(ui_button_task, "BTN", 3072, NULL, 3, NULL, tskNO_AFFINITY);
 }

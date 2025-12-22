@@ -17,6 +17,7 @@
 #include <driver/twai.h>
 #include <esp_err.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 
 #include "display_manager.h"
 #include "display_manager/page.h"
@@ -97,6 +98,21 @@ typedef struct {
 
 static SemaphoreHandle_t s_metrics_mutex = NULL;
 static can_metrics_t s_metrics = {};
+static SemaphoreHandle_t s_can_state_mutex = NULL;
+
+typedef struct {
+    bool paused;
+    bool error_active;
+    int fail_count;
+    int64_t last_rx_ms;
+} can_state_t;
+
+static can_state_t s_can_state = {};
+
+static lv_obj_t *s_diag_error_label = NULL;
+static lv_obj_t *s_fourrunner_error_label = NULL;
+static lv_obj_t *s_diag_can_toggle_label = NULL;
+static lv_obj_t *s_fourrunner_can_toggle_label = NULL;
 
 typedef struct {
     uint8_t service;
@@ -143,9 +159,13 @@ static const lv_color_t k_nav_button_color = lv_color_hex(0x1b2635);
 static const lv_color_t k_text_color = lv_color_hex(0xe6e6e6);
 static const lv_color_t k_muted_text_color = lv_color_hex(0xa1afbf);
 static const lv_color_t k_accent_color = lv_color_hex(0x43c6b6);
+static const lv_color_t k_warning_color = lv_color_hex(0xf2b94b);
 static const lv_font_t *k_title_font = &lv_font_montserrat_20;
 static const lv_font_t *k_value_font = &lv_font_montserrat_20;
 static const lv_font_t *k_label_font = &lv_font_montserrat_14;
+
+static const int k_can_error_fail_threshold = 5;
+static const int64_t k_can_error_stale_ms = 2000;
 
 static void apply_page_theme(lv_obj_t *container)
 {
@@ -210,8 +230,135 @@ static void page_swipe_event_cb(lv_event_t *e)
     }
 }
 
+static int64_t get_time_ms(void)
+{
+    return esp_timer_get_time() / 1000;
+}
+
+static bool can_state_is_paused(void)
+{
+    bool paused = false;
+    if (s_can_state_mutex &&
+        xSemaphoreTake(s_can_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        paused = s_can_state.paused;
+        xSemaphoreGive(s_can_state_mutex);
+    }
+    return paused;
+}
+
+static void can_ui_update_cb(void *arg)
+{
+    (void)arg;
+    can_state_t snapshot = {};
+    if (s_can_state_mutex &&
+        xSemaphoreTake(s_can_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        snapshot = s_can_state;
+        xSemaphoreGive(s_can_state_mutex);
+    }
+
+    const char *indicator = "";
+    if (snapshot.paused) {
+        indicator = "CAN PAUSED";
+    } else if (snapshot.error_active) {
+        indicator = "CAN ERROR";
+    }
+    if (s_diag_error_label) {
+        lv_label_set_text(s_diag_error_label, indicator);
+    }
+    if (s_fourrunner_error_label) {
+        lv_label_set_text(s_fourrunner_error_label, indicator);
+    }
+
+    const char *toggle_text = snapshot.paused ? "Resume CAN" : "Pause CAN";
+    if (s_diag_can_toggle_label) {
+        lv_label_set_text(s_diag_can_toggle_label, toggle_text);
+    }
+    if (s_fourrunner_can_toggle_label) {
+        lv_label_set_text(s_fourrunner_can_toggle_label, toggle_text);
+    }
+}
+
+static void schedule_can_ui_update(void)
+{
+    lv_async_call(can_ui_update_cb, NULL);
+}
+
+static void update_can_error_state(bool rx_ok, bool tx_failed)
+{
+    if (!s_can_state_mutex) {
+        return;
+    }
+
+    bool changed = false;
+    if (xSemaphoreTake(s_can_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        bool prev_error = s_can_state.error_active;
+        int64_t now_ms = get_time_ms();
+
+        if (rx_ok) {
+            s_can_state.last_rx_ms = now_ms;
+            s_can_state.fail_count = 0;
+            s_can_state.error_active = false;
+        }
+
+        if (!s_can_state.paused && tx_failed) {
+            s_can_state.fail_count++;
+        }
+
+        if (!s_can_state.paused && !s_can_state.error_active &&
+            s_can_state.fail_count >= k_can_error_fail_threshold &&
+            (now_ms - s_can_state.last_rx_ms) > k_can_error_stale_ms) {
+            s_can_state.error_active = true;
+        }
+
+        if (prev_error != s_can_state.error_active) {
+            changed = true;
+        }
+
+        xSemaphoreGive(s_can_state_mutex);
+    }
+
+    if (changed) {
+        schedule_can_ui_update();
+    }
+}
+
+static void set_can_paused(bool paused)
+{
+    if (!s_can_state_mutex) {
+        return;
+    }
+
+    if (paused) {
+        esp_err_t err = twai_stop();
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "Failed to stop TWAI: %s", esp_err_to_name(err));
+        }
+    } else {
+        esp_err_t err = twai_start();
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "Failed to start TWAI: %s", esp_err_to_name(err));
+        }
+    }
+
+    if (xSemaphoreTake(s_can_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        s_can_state.paused = paused;
+        s_can_state.error_active = false;
+        s_can_state.fail_count = 0;
+        s_can_state.last_rx_ms = get_time_ms();
+        xSemaphoreGive(s_can_state_mutex);
+    }
+
+    schedule_can_ui_update();
+}
+
+static void can_toggle_event_cb(lv_event_t *e)
+{
+    (void)e;
+    set_can_paused(!can_state_is_paused());
+}
+
 static lv_obj_t *create_header_block(lv_obj_t *parent, const char *title, const char *subtitle,
-                                     lv_obj_t **counter_out)
+                                     lv_obj_t **counter_out, lv_obj_t **error_out)
 {
     lv_obj_t *header = lv_obj_create(parent);
     lv_obj_set_width(header, LV_PCT(100));
@@ -266,6 +413,18 @@ static lv_obj_t *create_header_block(lv_obj_t *parent, const char *title, const 
         *counter_out = counter;
     }
 
+    lv_obj_t *error_label = lv_label_create(header);
+    lv_label_set_text(error_label, "");
+    lv_obj_set_style_text_font(error_label, k_label_font, 0);
+    lv_obj_set_style_text_color(error_label, k_warning_color, 0);
+    lv_obj_add_flag(error_label, LV_OBJ_FLAG_FLOATING);
+    lv_obj_add_flag(error_label, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_align(error_label, LV_ALIGN_TOP_MID, 0, 0);
+
+    if (error_out) {
+        *error_out = error_label;
+    }
+
     return header;
 }
 
@@ -308,7 +467,7 @@ static lv_obj_t *create_nav_button(lv_obj_t *parent, const char *text, lv_event_
     return btn;
 }
 
-static void create_nav_bar(lv_obj_t *parent)
+static void create_nav_bar(lv_obj_t *parent, lv_obj_t **toggle_label_out)
 {
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_set_width(bar, LV_PCT(100));
@@ -326,6 +485,26 @@ static void create_nav_bar(lv_obj_t *parent)
     lv_obj_add_flag(bar, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
     create_nav_button(bar, "<", nav_prev_event_cb);
+    lv_obj_t *can_btn = lv_btn_create(bar);
+    lv_obj_set_size(can_btn, 160, 44);
+    lv_obj_set_style_bg_color(can_btn, k_nav_button_color, 0);
+    lv_obj_set_style_bg_opa(can_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(can_btn, 14, 0);
+    lv_obj_set_style_border_width(can_btn, 1, 0);
+    lv_obj_set_style_border_color(can_btn, k_card_border, 0);
+    lv_obj_set_style_shadow_width(can_btn, 0, 0);
+    lv_obj_add_event_cb(can_btn, can_toggle_event_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *toggle_label = lv_label_create(can_btn);
+    lv_label_set_text(toggle_label, can_state_is_paused() ? "Resume CAN" : "Pause CAN");
+    lv_obj_set_style_text_font(toggle_label, k_label_font, 0);
+    lv_obj_set_style_text_color(toggle_label, k_text_color, 0);
+    lv_obj_center(toggle_label);
+
+    if (toggle_label_out) {
+        *toggle_label_out = toggle_label;
+    }
+
     create_nav_button(bar, ">", nav_next_event_cb);
 }
 
@@ -524,8 +703,13 @@ static void can_rx_task(void *arg)
     ESP_LOGI(TAG, "CAN RX task started");
 
     while (1) {
+        if (can_state_is_paused()) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         if (twai_receive(&rx_msg, pdMS_TO_TICKS(100)) == ESP_OK) {
             process_obd_response(&rx_msg);
+            update_can_error_state(true, false);
         }
     }
 }
@@ -538,12 +722,17 @@ static void can_tx_task(void *arg)
     ESP_LOGI(TAG, "CAN TX task started");
 
     while (1) {
+        if (can_state_is_paused()) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         const obd_request_t *req = &k_request_sequence[request_index];
         twai_message_t msg = build_obd_request(req->service, req->pid);
         esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(50));
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "OBD request 0x%02X 0x%02X failed: %s",
                      req->service, req->pid, esp_err_to_name(err));
+            update_can_error_state(false, true);
         }
 
         request_index = (request_index + 1) % (sizeof(k_request_sequence) / sizeof(k_request_sequence[0]));
@@ -558,6 +747,8 @@ typedef struct {
     lv_obj_t *iat_value;
     lv_obj_t *baro_value;
     lv_obj_t *page_counter;
+    lv_obj_t *error_label;
+    lv_obj_t *can_toggle_label;
 } diag_page_data_t;
 
 static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
@@ -581,7 +772,9 @@ static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    create_header_block(page->container, "Diagnostics", "OBD-II live metrics", &data->page_counter);
+    create_header_block(page->container, "Diagnostics", "OBD-II live metrics",
+                        &data->page_counter, &data->error_label);
+    s_diag_error_label = data->error_label;
 
     lv_obj_t *grid = create_metrics_grid(page->container);
 
@@ -597,7 +790,8 @@ static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
     card = create_metric_card(grid, "Baro (kPa)", &data->baro_value);
     lv_obj_set_size(card, LV_PCT(48), 110);
 
-    create_nav_bar(page->container);
+    create_nav_bar(page->container, &data->can_toggle_label);
+    s_diag_can_toggle_label = data->can_toggle_label;
 
     page->is_created = true;
 }
@@ -675,6 +869,8 @@ typedef struct {
     lv_obj_t *gear_value;
     lv_obj_t *odo_value;
     lv_obj_t *page_counter;
+    lv_obj_t *error_label;
+    lv_obj_t *can_toggle_label;
 } fourrunner_page_data_t;
 
 static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
@@ -698,7 +894,9 @@ static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    create_header_block(page->container, "4Runner Data", "Toyota PIDs", &data->page_counter);
+    create_header_block(page->container, "4Runner Data", "Toyota PIDs",
+                        &data->page_counter, &data->error_label);
+    s_fourrunner_error_label = data->error_label;
 
     lv_obj_t *grid = create_metrics_grid(page->container);
 
@@ -711,7 +909,8 @@ static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
     card = create_metric_card(grid, "Odometer (km)", &data->odo_value);
     lv_obj_set_size(card, LV_PCT(31), 120);
 
-    create_nav_bar(page->container);
+    create_nav_bar(page->container, &data->can_toggle_label);
+    s_fourrunner_can_toggle_label = data->can_toggle_label;
 
     page->is_created = true;
 }
@@ -809,6 +1008,16 @@ extern "C" void app_main(void)
     if (!s_metrics_mutex) {
         ESP_LOGE(TAG, "Failed to create metrics mutex");
         return;
+    }
+
+    s_can_state_mutex = xSemaphoreCreateMutex();
+    if (!s_can_state_mutex) {
+        ESP_LOGE(TAG, "Failed to create CAN state mutex");
+        return;
+    }
+    if (xSemaphoreTake(s_can_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        s_can_state.last_rx_ms = get_time_ms();
+        xSemaphoreGive(s_can_state_mutex);
     }
 
     ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));

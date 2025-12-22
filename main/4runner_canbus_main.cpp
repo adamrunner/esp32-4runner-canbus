@@ -28,7 +28,8 @@ static const char *TAG = "4RUNNER_CAN";
 #define RX_GPIO_NUM GPIO_NUM_16
 
 #define OBD_REQUEST_ID 0x7E0
-#define OBD_RESPONSE_ID 0x7E8
+#define OBD_RESPONSE_ID_MIN 0x7E8
+#define OBD_RESPONSE_ID_MAX 0x7EF
 
 #define OBD_POLL_INTERVAL_MS 150
 
@@ -137,6 +138,8 @@ static int s_active_page = 0;
 
 static const lv_color_t k_bg_color = lv_color_hex(0x0f1115);
 static const lv_color_t k_text_color = lv_color_hex(0xe6e6e6);
+static const lv_font_t *k_title_font = &lv_font_montserrat_18;
+static const lv_font_t *k_value_font = &lv_font_montserrat_18;
 
 static void apply_dark_theme(lv_obj_t *container)
 {
@@ -147,6 +150,10 @@ static void apply_dark_theme(lv_obj_t *container)
     lv_obj_set_style_bg_color(container, k_bg_color, 0);
     lv_obj_set_style_bg_opa(container, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(container, k_text_color, 0);
+    lv_obj_set_style_text_font(container, k_value_font, 0);
+    lv_obj_set_style_radius(container, 0, 0);
+    lv_obj_set_style_border_width(container, 0, 0);
+    lv_obj_set_style_outline_width(container, 0, 0);
 }
 
 static void page_tap_event_cb(lv_event_t *e)
@@ -178,11 +185,16 @@ static twai_message_t build_obd_request(uint8_t service, uint8_t pid)
 
     msg.identifier = OBD_REQUEST_ID;
     msg.data_length_code = 8;
-    msg.data[0] = (service == 0x21) ? 0x03 : 0x02;
+    msg.data[0] = 0x02;
     msg.data[1] = service;
     msg.data[2] = pid;
 
     return msg;
+}
+
+static bool is_obd_response_id(uint32_t identifier)
+{
+    return identifier >= OBD_RESPONSE_ID_MIN && identifier <= OBD_RESPONSE_ID_MAX;
 }
 
 static void handle_standard_response(const twai_message_t *msg)
@@ -272,7 +284,7 @@ static void handle_extended_response(const twai_message_t *msg)
 
 static void process_obd_response(const twai_message_t *msg)
 {
-    if (!msg || msg->identifier != OBD_RESPONSE_ID) {
+    if (!msg || !is_obd_response_id(msg->identifier)) {
         return;
     }
 
@@ -358,7 +370,7 @@ static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
 
     lv_obj_t *title = lv_label_create(page->container);
     lv_label_set_text(title, "Diagnostics");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(title, k_title_font, 0);
     lv_obj_set_style_text_color(title, k_text_color, 0);
 
     data->rpm_label = lv_label_create(page->container);
@@ -459,7 +471,7 @@ static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
 
     lv_obj_t *title = lv_label_create(page->container);
     lv_label_set_text(title, "4Runner Data");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(title, k_title_font, 0);
     lv_obj_set_style_text_color(title, k_text_color, 0);
 
     data->atf_label = lv_label_create(page->container);

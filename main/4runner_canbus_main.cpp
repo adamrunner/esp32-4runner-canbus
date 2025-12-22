@@ -136,12 +136,18 @@ static display_manager_handle_t s_display = NULL;
 static int s_page_count = 0;
 static int s_active_page = 0;
 
-static const lv_color_t k_bg_color = lv_color_hex(0x0f1115);
+static const lv_color_t k_bg_color = lv_color_hex(0x111417);
+static const lv_color_t k_card_color = lv_color_hex(0x151f2b);
+static const lv_color_t k_card_border = lv_color_hex(0x253142);
+static const lv_color_t k_nav_button_color = lv_color_hex(0x1b2635);
 static const lv_color_t k_text_color = lv_color_hex(0xe6e6e6);
-static const lv_font_t *k_title_font = &lv_font_montserrat_18;
-static const lv_font_t *k_value_font = &lv_font_montserrat_18;
+static const lv_color_t k_muted_text_color = lv_color_hex(0xa1afbf);
+static const lv_color_t k_accent_color = lv_color_hex(0x43c6b6);
+static const lv_font_t *k_title_font = &lv_font_montserrat_20;
+static const lv_font_t *k_value_font = &lv_font_montserrat_20;
+static const lv_font_t *k_label_font = &lv_font_montserrat_14;
 
-static void apply_dark_theme(lv_obj_t *container)
+static void apply_page_theme(lv_obj_t *container)
 {
     if (!container) {
         return;
@@ -154,18 +160,222 @@ static void apply_dark_theme(lv_obj_t *container)
     lv_obj_set_style_radius(container, 0, 0);
     lv_obj_set_style_border_width(container, 0, 0);
     lv_obj_set_style_outline_width(container, 0, 0);
+    lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
 }
 
-static void page_tap_event_cb(lv_event_t *e)
+static void switch_page_by_offset(int offset)
 {
-    (void)e;
-
     if (!s_display || s_page_count <= 1) {
         return;
     }
 
-    s_active_page = (s_active_page + 1) % s_page_count;
+    s_active_page += offset;
+    if (s_active_page < 0) {
+        s_active_page = s_page_count - 1;
+    } else if (s_active_page >= s_page_count) {
+        s_active_page = 0;
+    }
+
     display_manager_switch_to_page(s_display, s_active_page);
+}
+
+static void nav_prev_event_cb(lv_event_t *e)
+{
+    (void)e;
+    switch_page_by_offset(-1);
+}
+
+static void nav_next_event_cb(lv_event_t *e)
+{
+    (void)e;
+    switch_page_by_offset(1);
+}
+
+static void page_swipe_event_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = (lv_indev_t *)lv_event_get_param(e);
+    if (!indev) {
+        indev = lv_indev_get_act();
+    }
+    if (!indev) {
+        return;
+    }
+
+    lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+    if (dir == LV_DIR_LEFT) {
+        switch_page_by_offset(1);
+    } else if (dir == LV_DIR_RIGHT) {
+        switch_page_by_offset(-1);
+    }
+}
+
+static lv_obj_t *create_header_block(lv_obj_t *parent, const char *title, const char *subtitle,
+                                     lv_obj_t **counter_out)
+{
+    lv_obj_t *header = lv_obj_create(parent);
+    lv_obj_set_width(header, LV_PCT(100));
+    lv_obj_set_height(header, LV_PCT(10));
+    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(header, 0, 0);
+    lv_obj_set_style_pad_all(header, 0, 0);
+    lv_obj_set_style_pad_row(header, 0, 0);
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(header, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    lv_obj_t *left = lv_obj_create(header);
+    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(left, 0, 0);
+    lv_obj_set_style_pad_all(left, 0, 0);
+    lv_obj_set_style_pad_row(left, 0, 0);
+    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_width(left, LV_PCT(80));
+    lv_obj_set_height(left, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_right(left, 8, 0);
+    lv_obj_set_flex_grow(left, 1);
+    lv_obj_clear_flag(left, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(left, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    lv_obj_t *title_label = lv_label_create(left);
+    lv_label_set_text(title_label, title);
+    lv_obj_set_width(title_label, LV_PCT(100));
+    lv_label_set_long_mode(title_label, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_font(title_label, k_title_font, 0);
+    lv_obj_set_style_text_color(title_label, k_text_color, 0);
+    lv_obj_add_flag(title_label, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    if (subtitle) {
+        lv_obj_t *subtitle_label = lv_label_create(left);
+        lv_label_set_text(subtitle_label, subtitle);
+        lv_obj_set_style_text_font(subtitle_label, k_label_font, 0);
+        lv_obj_set_style_text_color(subtitle_label, k_muted_text_color, 0);
+        lv_obj_add_flag(subtitle_label, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    }
+
+    lv_obj_t *counter = lv_label_create(header);
+    lv_label_set_text(counter, "1/1");
+    lv_obj_set_style_text_font(counter, k_label_font, 0);
+    lv_obj_set_style_text_color(counter, k_muted_text_color, 0);
+    lv_obj_set_style_text_align(counter, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_add_flag(counter, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    if (counter_out) {
+        *counter_out = counter;
+    }
+
+    return header;
+}
+
+static lv_obj_t *create_metrics_grid(lv_obj_t *parent)
+{
+    lv_obj_t *grid = lv_obj_create(parent);
+    lv_obj_set_width(grid, LV_PCT(100));
+    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(grid, 0, 0);
+    lv_obj_set_style_pad_all(grid, 0, 0);
+    lv_obj_set_style_pad_row(grid, 12, 0);
+    lv_obj_set_style_pad_column(grid, 12, 0);
+    lv_obj_set_flex_grow(grid, 1);
+    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(grid, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    return grid;
+}
+
+static lv_obj_t *create_nav_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, 56, 44);
+    lv_obj_set_style_bg_color(btn, k_nav_button_color, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(btn, 14, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, k_card_border, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, k_value_font, 0);
+    lv_obj_set_style_text_color(label, k_text_color, 0);
+    lv_obj_center(label);
+
+    return btn;
+}
+
+static void create_nav_bar(lv_obj_t *parent)
+{
+    lv_obj_t *bar = lv_obj_create(parent);
+    lv_obj_set_width(bar, LV_PCT(100));
+    lv_obj_set_height(bar, 56);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(bar, 0, 0);
+    lv_obj_set_style_pad_left(bar, 6, 0);
+    lv_obj_set_style_pad_right(bar, 6, 0);
+    lv_obj_set_style_pad_top(bar, 0, 0);
+    lv_obj_set_style_pad_bottom(bar, 0, 0);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    create_nav_button(bar, "<", nav_prev_event_cb);
+    create_nav_button(bar, ">", nav_next_event_cb);
+}
+
+static lv_obj_t *create_metric_card(lv_obj_t *parent, const char *label_text, lv_obj_t **value_label_out)
+{
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_set_style_bg_color(card, k_card_color, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, k_card_border, 0);
+    lv_obj_set_style_radius(card, 18, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_width(card, 18, 0);
+    lv_obj_set_style_shadow_offset_y(card, 6, 0);
+    lv_obj_set_style_pad_all(card, 12, 0);
+    lv_obj_set_style_pad_row(card, 6, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    lv_obj_t *label = lv_label_create(card);
+    lv_label_set_text(label, label_text);
+    lv_obj_set_style_text_font(label, k_label_font, 0);
+    lv_obj_set_style_text_color(label, k_muted_text_color, 0);
+    lv_obj_add_flag(label, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    lv_obj_t *value = lv_label_create(card);
+    lv_label_set_text(value, "--");
+    lv_obj_set_style_text_font(value, k_value_font, 0);
+    lv_obj_set_style_text_color(value, k_accent_color, 0);
+    lv_obj_add_flag(value, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    if (value_label_out) {
+        *value_label_out = value;
+    }
+
+    return card;
+}
+
+static void update_page_counter(lv_obj_t *label, int page_index)
+{
+    if (!label || s_page_count <= 0) {
+        return;
+    }
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d/%d", page_index + 1, s_page_count);
+    lv_label_set_text(label, buf);
 }
 
 static void metrics_get_snapshot(can_metrics_t *out)
@@ -342,10 +552,12 @@ static void can_tx_task(void *arg)
 }
 
 typedef struct {
-    lv_obj_t *rpm_label;
-    lv_obj_t *vbatt_label;
-    lv_obj_t *iat_label;
-    lv_obj_t *baro_label;
+    int page_index;
+    lv_obj_t *rpm_value;
+    lv_obj_t *vbatt_value;
+    lv_obj_t *iat_value;
+    lv_obj_t *baro_value;
+    lv_obj_t *page_counter;
 } diag_page_data_t;
 
 static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
@@ -355,32 +567,37 @@ static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
         return;
     }
 
+    data->page_index = 0;
+
     page->user_data = data;
     page->container = lv_obj_create(parent);
     lv_obj_set_size(page->container, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_flow(page->container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(page->container, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(page->container, 6, 0);
+    lv_obj_set_flex_align(page->container, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(page->container, 14, 0);
     lv_obj_set_style_pad_row(page->container, 8, 0);
-    lv_obj_set_style_border_width(page->container, 0, 0);
-    apply_dark_theme(page->container);
+    apply_page_theme(page->container);
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(page->container, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(page->container, page_tap_event_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_flag(page->container, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    lv_obj_t *title = lv_label_create(page->container);
-    lv_label_set_text(title, "Diagnostics");
-    lv_obj_set_style_text_font(title, k_title_font, 0);
-    lv_obj_set_style_text_color(title, k_text_color, 0);
+    create_header_block(page->container, "Diagnostics", "OBD-II live metrics", &data->page_counter);
 
-    data->rpm_label = lv_label_create(page->container);
-    data->vbatt_label = lv_label_create(page->container);
-    data->iat_label = lv_label_create(page->container);
-    data->baro_label = lv_label_create(page->container);
-    lv_obj_set_style_text_color(data->rpm_label, k_text_color, 0);
-    lv_obj_set_style_text_color(data->vbatt_label, k_text_color, 0);
-    lv_obj_set_style_text_color(data->iat_label, k_text_color, 0);
-    lv_obj_set_style_text_color(data->baro_label, k_text_color, 0);
+    lv_obj_t *grid = create_metrics_grid(page->container);
+
+    lv_obj_t *card = create_metric_card(grid, "RPM", &data->rpm_value);
+    lv_obj_set_size(card, LV_PCT(48), 110);
+
+    card = create_metric_card(grid, "Battery (V)", &data->vbatt_value);
+    lv_obj_set_size(card, LV_PCT(48), 110);
+
+    card = create_metric_card(grid, "IAT (C)", &data->iat_value);
+    lv_obj_set_size(card, LV_PCT(48), 110);
+
+    card = create_metric_card(grid, "Baro (kPa)", &data->baro_value);
+    lv_obj_set_size(card, LV_PCT(48), 110);
+
+    create_nav_bar(page->container);
 
     page->is_created = true;
 }
@@ -394,7 +611,14 @@ static void diag_page_on_destroy(dm_page_t *page)
 
 static void diag_page_on_show(dm_page_t *page)
 {
+    diag_page_data_t *data = (diag_page_data_t *)page->user_data;
+    if (!data) {
+        return;
+    }
+
+    s_active_page = data->page_index;
     lv_obj_clear_flag(page->container, LV_OBJ_FLAG_HIDDEN);
+    update_page_counter(data->page_counter, data->page_index);
 }
 
 static void diag_page_on_hide(dm_page_t *page)
@@ -415,38 +639,42 @@ static void diag_page_on_update(dm_page_t *page)
     char buf[48];
 
     if (snap.rpm_valid) {
-        snprintf(buf, sizeof(buf), "RPM: %.0f", snap.rpm);
+        snprintf(buf, sizeof(buf), "%.0f", snap.rpm);
     } else {
-        snprintf(buf, sizeof(buf), "RPM: --");
+        snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->rpm_label, buf);
+    lv_label_set_text(data->rpm_value, buf);
 
     if (snap.vbatt_valid) {
-        snprintf(buf, sizeof(buf), "Batt: %.2f V", snap.vbatt_v);
+        snprintf(buf, sizeof(buf), "%.2f", snap.vbatt_v);
     } else {
-        snprintf(buf, sizeof(buf), "Batt: --");
+        snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->vbatt_label, buf);
+    lv_label_set_text(data->vbatt_value, buf);
 
     if (snap.iat_valid) {
-        snprintf(buf, sizeof(buf), "IAT: %.1f C", snap.iat_c);
+        snprintf(buf, sizeof(buf), "%.1f", snap.iat_c);
     } else {
-        snprintf(buf, sizeof(buf), "IAT: --");
+        snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->iat_label, buf);
+    lv_label_set_text(data->iat_value, buf);
 
     if (snap.baro_valid) {
-        snprintf(buf, sizeof(buf), "Baro: %.0f kPa", snap.baro_kpa);
+        snprintf(buf, sizeof(buf), "%.0f", snap.baro_kpa);
     } else {
-        snprintf(buf, sizeof(buf), "Baro: --");
+        snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->baro_label, buf);
+    lv_label_set_text(data->baro_value, buf);
+
+    update_page_counter(data->page_counter, data->page_index);
 }
 
 typedef struct {
-    lv_obj_t *atf_label;
-    lv_obj_t *gear_label;
-    lv_obj_t *odo_label;
+    int page_index;
+    lv_obj_t *atf_value;
+    lv_obj_t *gear_value;
+    lv_obj_t *odo_value;
+    lv_obj_t *page_counter;
 } fourrunner_page_data_t;
 
 static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
@@ -456,30 +684,34 @@ static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
         return;
     }
 
+    data->page_index = 1;
+
     page->user_data = data;
     page->container = lv_obj_create(parent);
     lv_obj_set_size(page->container, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_flow(page->container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(page->container, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(page->container, 6, 0);
+    lv_obj_set_flex_align(page->container, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(page->container, 14, 0);
     lv_obj_set_style_pad_row(page->container, 8, 0);
-    lv_obj_set_style_border_width(page->container, 0, 0);
-    apply_dark_theme(page->container);
+    apply_page_theme(page->container);
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(page->container, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(page->container, page_tap_event_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_flag(page->container, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    lv_obj_t *title = lv_label_create(page->container);
-    lv_label_set_text(title, "4Runner Data");
-    lv_obj_set_style_text_font(title, k_title_font, 0);
-    lv_obj_set_style_text_color(title, k_text_color, 0);
+    create_header_block(page->container, "4Runner Data", "Toyota PIDs", &data->page_counter);
 
-    data->atf_label = lv_label_create(page->container);
-    data->gear_label = lv_label_create(page->container);
-    data->odo_label = lv_label_create(page->container);
-    lv_obj_set_style_text_color(data->atf_label, k_text_color, 0);
-    lv_obj_set_style_text_color(data->gear_label, k_text_color, 0);
-    lv_obj_set_style_text_color(data->odo_label, k_text_color, 0);
+    lv_obj_t *grid = create_metrics_grid(page->container);
+
+    lv_obj_t *card = create_metric_card(grid, "ATF Pan (C)", &data->atf_value);
+    lv_obj_set_size(card, LV_PCT(31), 120);
+
+    card = create_metric_card(grid, "Gear", &data->gear_value);
+    lv_obj_set_size(card, LV_PCT(31), 120);
+
+    card = create_metric_card(grid, "Odometer (km)", &data->odo_value);
+    lv_obj_set_size(card, LV_PCT(31), 120);
+
+    create_nav_bar(page->container);
 
     page->is_created = true;
 }
@@ -493,7 +725,14 @@ static void fourrunner_page_on_destroy(dm_page_t *page)
 
 static void fourrunner_page_on_show(dm_page_t *page)
 {
+    fourrunner_page_data_t *data = (fourrunner_page_data_t *)page->user_data;
+    if (!data) {
+        return;
+    }
+
+    s_active_page = data->page_index;
     lv_obj_clear_flag(page->container, LV_OBJ_FLAG_HIDDEN);
+    update_page_counter(data->page_counter, data->page_index);
 }
 
 static void fourrunner_page_on_hide(dm_page_t *page)
@@ -514,25 +753,27 @@ static void fourrunner_page_on_update(dm_page_t *page)
     char buf[48];
 
     if (snap.atf_valid) {
-        snprintf(buf, sizeof(buf), "ATF Pan: %.1f C", snap.atf_pan_c);
+        snprintf(buf, sizeof(buf), "%.1f", snap.atf_pan_c);
     } else {
-        snprintf(buf, sizeof(buf), "ATF Pan: --");
+        snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->atf_label, buf);
+    lv_label_set_text(data->atf_value, buf);
 
     if (snap.gear_valid) {
-        snprintf(buf, sizeof(buf), "Gear: %d", snap.gear);
+        snprintf(buf, sizeof(buf), "%d", snap.gear);
     } else {
-        snprintf(buf, sizeof(buf), "Gear: --");
+        snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->gear_label, buf);
+    lv_label_set_text(data->gear_value, buf);
 
     if (snap.odo_valid) {
-        snprintf(buf, sizeof(buf), "ODO: %lu km", (unsigned long)snap.odo_km);
+        snprintf(buf, sizeof(buf), "%lu", (unsigned long)snap.odo_km);
     } else {
-        snprintf(buf, sizeof(buf), "ODO: --");
+        snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->odo_label, buf);
+    lv_label_set_text(data->odo_value, buf);
+
+    update_page_counter(data->page_counter, data->page_index);
 }
 
 static dm_page_t *diag_page_create(void)
@@ -616,6 +857,15 @@ extern "C" void app_main(void)
     if (!s_display) {
         ESP_LOGE(TAG, "Failed to initialize display manager");
         return;
+    }
+
+    lv_display_t *display = display_manager_get_display(s_display);
+    if (display) {
+        lv_obj_t *screen = lv_display_get_screen_active(display);
+        if (screen) {
+            lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_event_cb(screen, page_swipe_event_cb, LV_EVENT_GESTURE, NULL);
+        }
     }
 
     dm_page_t *diag_page = diag_page_create();

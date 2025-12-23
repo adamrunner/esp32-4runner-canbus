@@ -32,6 +32,10 @@ static const char *TAG = "4RUNNER_CAN";
 #define OBD_RESPONSE_ID_MIN 0x7E8
 #define OBD_RESPONSE_ID_MAX 0x7EF
 
+#define ABS_REQUEST_ID 0x7B0
+#define METER_REQUEST_ID 0x7C0
+#define TPMS_BROADCAST_ID 0x0AA
+
 #define OBD_POLL_INTERVAL_MS 150
 
 static const int lcd_h_res = 800;
@@ -84,16 +88,29 @@ typedef struct {
     float iat_c;
     float baro_kpa;
     float atf_pan_c;
+    float atf_tqc_c;
+    float fli_vol_gal;
     uint32_t odo_km;
     int gear;
     bool tqc_lockup;
+    float tire_fl_psi;
+    float tire_fr_psi;
+    float tire_rl_psi;
+    float tire_rr_psi;
+    float tire_fl_kph;
+    float tire_fr_kph;
+    float tire_rl_kph;
+    float tire_rr_kph;
     bool rpm_valid;
     bool vbatt_valid;
     bool iat_valid;
     bool baro_valid;
     bool atf_valid;
+    bool fuel_valid;
     bool odo_valid;
     bool gear_valid;
+    bool tire_pressure_valid;
+    bool wheel_speed_valid;
 } can_metrics_t;
 
 static SemaphoreHandle_t s_metrics_mutex = NULL;
@@ -111,22 +128,29 @@ static can_state_t s_can_state = {};
 
 static lv_obj_t *s_diag_error_label = NULL;
 static lv_obj_t *s_fourrunner_error_label = NULL;
+static lv_obj_t *s_tire_error_label = NULL;
 static lv_obj_t *s_diag_can_toggle_label = NULL;
 static lv_obj_t *s_fourrunner_can_toggle_label = NULL;
+static lv_obj_t *s_tire_can_toggle_label = NULL;
 
 typedef struct {
+    uint16_t header;
     uint8_t service;
     uint8_t pid;
+    uint8_t ext_addr;  // 0 = no extended addressing, otherwise the extended address byte
 } obd_request_t;
 
 static const obd_request_t k_request_sequence[] = {
-    {0x01, 0x0C},
-    {0x01, 0x42},
-    {0x01, 0x0F},
-    {0x01, 0x33},
-    {0x21, 0x82},
-    {0x21, 0x85},
-    {0x21, 0x28},
+    {OBD_REQUEST_ID, 0x01, 0x0C, 0},
+    {OBD_REQUEST_ID, 0x01, 0x42, 0},
+    {OBD_REQUEST_ID, 0x01, 0x0F, 0},
+    {OBD_REQUEST_ID, 0x01, 0x33, 0},
+    {OBD_REQUEST_ID, 0x21, 0x82, 0},
+    {OBD_REQUEST_ID, 0x21, 0x85, 0},
+    {OBD_REQUEST_ID, 0x21, 0x28, 0},
+    // TPMS data is broadcast on 0x0AA - no request needed
+    {METER_REQUEST_ID, 0x21, 0x29, 0},  // Fuel level
+    {ABS_REQUEST_ID, 0x21, 0x03, 0},  // Wheel speeds
 };
 
 static const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
@@ -147,6 +171,7 @@ static const twai_general_config_t g_config = {
         .sleep_allow_pd = 0,
     },
 };
+
 
 static display_manager_handle_t s_display = NULL;
 static int s_page_count = 0;
@@ -268,6 +293,9 @@ static void can_ui_update_cb(void *arg)
     if (s_fourrunner_error_label) {
         lv_label_set_text(s_fourrunner_error_label, indicator);
     }
+    if (s_tire_error_label) {
+        lv_label_set_text(s_tire_error_label, indicator);
+    }
 
     const char *toggle_text = snapshot.paused ? "Resume CAN" : "Pause CAN";
     if (s_diag_can_toggle_label) {
@@ -275,6 +303,9 @@ static void can_ui_update_cb(void *arg)
     }
     if (s_fourrunner_can_toggle_label) {
         lv_label_set_text(s_fourrunner_can_toggle_label, toggle_text);
+    }
+    if (s_tire_can_toggle_label) {
+        lv_label_set_text(s_tire_can_toggle_label, toggle_text);
     }
 }
 
@@ -568,22 +599,35 @@ static void metrics_get_snapshot(can_metrics_t *out)
     xSemaphoreGive(s_metrics_mutex);
 }
 
-static twai_message_t build_obd_request(uint8_t service, uint8_t pid)
+static twai_message_t build_obd_request(uint16_t header, uint8_t service, uint8_t pid, uint8_t ext_addr)
 {
     twai_message_t msg = {};
 
-    msg.identifier = OBD_REQUEST_ID;
+    msg.identifier = header;
     msg.data_length_code = 8;
-    msg.data[0] = 0x02;
-    msg.data[1] = service;
-    msg.data[2] = pid;
+
+    if (ext_addr != 0) {
+        // Extended addressing format: [ext_addr, length, service, pid, ...]
+        msg.data[0] = ext_addr;
+        msg.data[1] = 0x02;
+        msg.data[2] = service;
+        msg.data[3] = pid;
+    } else {
+        // Normal format: [length, service, pid, ...]
+        msg.data[0] = 0x02;
+        msg.data[1] = service;
+        msg.data[2] = pid;
+    }
 
     return msg;
 }
 
 static bool is_obd_response_id(uint32_t identifier)
 {
-    return identifier >= OBD_RESPONSE_ID_MIN && identifier <= OBD_RESPONSE_ID_MAX;
+    return (identifier >= OBD_RESPONSE_ID_MIN && identifier <= OBD_RESPONSE_ID_MAX) ||
+           (identifier == 0x7B8) ||  // ABS ECU response
+           (identifier == 0x7C8) ||  // Meter ECU response
+           (identifier == TPMS_BROADCAST_ID);  // TPMS broadcast
 }
 
 static void handle_standard_response(const twai_message_t *msg)
@@ -631,6 +675,32 @@ static void handle_standard_response(const twai_message_t *msg)
     xSemaphoreGive(s_metrics_mutex);
 }
 
+static void handle_tpms_broadcast(const twai_message_t *msg)
+{
+    // TPMS is broadcast on 0x0AA
+    // Format: [status1, tire1, status2, tire2, status3, tire3, status4, tire4]
+    // PSI = raw_value / 2.0
+    if (msg->data_length_code < 8) {
+        return;
+    }
+
+    xSemaphoreTake(s_metrics_mutex, portMAX_DELAY);
+
+    // Tire pressures are in bytes 1, 3, 5, 7 (odd bytes)
+    // Need to determine which tire is which (FL, FR, RL, RR)
+    s_metrics.tire_fl_psi = msg->data[1] / 2.0f;
+    s_metrics.tire_fr_psi = msg->data[3] / 2.0f;
+    s_metrics.tire_rl_psi = msg->data[5] / 2.0f;
+    s_metrics.tire_rr_psi = msg->data[7] / 2.0f;
+    s_metrics.tire_pressure_valid = true;
+
+    ESP_LOGI(TAG, "TPMS: FL=%.1f FR=%.1f RL=%.1f RR=%.1f PSI",
+             s_metrics.tire_fl_psi, s_metrics.tire_fr_psi,
+             s_metrics.tire_rl_psi, s_metrics.tire_rr_psi);
+
+    xSemaphoreGive(s_metrics_mutex);
+}
+
 static void handle_extended_response(const twai_message_t *msg)
 {
     uint8_t length = msg->data[0];
@@ -641,8 +711,11 @@ static void handle_extended_response(const twai_message_t *msg)
     switch (pid) {
         case 0x82: {
             if (length >= 6) {
-                uint16_t raw = (uint16_t)(msg->data[3] << 8) | msg->data[4];
-                s_metrics.atf_pan_c = (raw / 256.0f) - 40.0f;
+                uint16_t raw_pan = (uint16_t)(msg->data[3] << 8) | msg->data[4];
+                s_metrics.atf_pan_c = (raw_pan / 256.0f) - 40.0f;
+
+                uint16_t raw_tqc = (uint16_t)(msg->data[5] << 8) | msg->data[6];
+                s_metrics.atf_tqc_c = (raw_tqc / 256.0f) - 40.0f;
                 s_metrics.atf_valid = true;
             }
             break;
@@ -664,6 +737,38 @@ static void handle_extended_response(const twai_message_t *msg)
             }
             break;
         }
+        case 0x29: {
+            if (length >= 3) {
+                // Fuel level: (raw * 500) / 3785 gallons
+                uint8_t raw_fuel = msg->data[3];
+                s_metrics.fli_vol_gal = (raw_fuel * 500.0f) / 3785.0f;
+                s_metrics.fuel_valid = true;
+                ESP_LOGI(TAG, "Fuel level: raw=0x%02X (%.2f gal)", raw_fuel, s_metrics.fli_vol_gal);
+            }
+            break;
+        }
+        case 0x30: {
+            if (length >= 7) {
+                // Single-frame TPMS response (if it ever happens)
+                s_metrics.tire_fl_psi = ((msg->data[3] / 58.0f) - 0.5f) * 14.5038f;
+                s_metrics.tire_fr_psi = ((msg->data[4] / 58.0f) - 0.5f) * 14.5038f;
+                s_metrics.tire_rl_psi = ((msg->data[5] / 58.0f) - 0.5f) * 14.5038f;
+                s_metrics.tire_rr_psi = ((msg->data[6] / 58.0f) - 0.5f) * 14.5038f;
+                s_metrics.tire_pressure_valid = true;
+            }
+            break;
+        }
+        case 0x03: {
+            if (length >= 7) {
+                // Wheel speeds: (raw * 256) / 200 kph
+                s_metrics.tire_fr_kph = (msg->data[3] * 256.0f) / 200.0f;
+                s_metrics.tire_fl_kph = (msg->data[4] * 256.0f) / 200.0f;
+                s_metrics.tire_rr_kph = (msg->data[5] * 256.0f) / 200.0f;
+                s_metrics.tire_rl_kph = (msg->data[6] * 256.0f) / 200.0f;
+                s_metrics.wheel_speed_valid = true;
+            }
+            break;
+        }
         default:
             break;
     }
@@ -673,7 +778,17 @@ static void handle_extended_response(const twai_message_t *msg)
 
 static void process_obd_response(const twai_message_t *msg)
 {
-    if (!msg || !is_obd_response_id(msg->identifier)) {
+    if (!msg) {
+        return;
+    }
+
+    // Handle TPMS broadcast (0x0AA)
+    if (msg->identifier == TPMS_BROADCAST_ID) {
+        handle_tpms_broadcast(msg);
+        return;
+    }
+
+    if (!is_obd_response_id(msg->identifier)) {
         return;
     }
 
@@ -687,6 +802,13 @@ static void process_obd_response(const twai_message_t *msg)
     }
 
     uint8_t service = msg->data[1];
+
+    // Log responses from meter ECU for debugging
+    if (msg->identifier == 0x7C8) {
+        ESP_LOGI(TAG, "Meter RX: %02X %02X %02X %02X %02X %02X %02X %02X",
+                 msg->data[0], msg->data[1], msg->data[2], msg->data[3],
+                 msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
+    }
 
     if (service == 0x41) {
         handle_standard_response(msg);
@@ -707,7 +829,9 @@ static void can_rx_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
-        if (twai_receive(&rx_msg, pdMS_TO_TICKS(100)) == ESP_OK) {
+
+        esp_err_t err = twai_receive(&rx_msg, pdMS_TO_TICKS(100));
+        if (err == ESP_OK) {
             process_obd_response(&rx_msg);
             update_can_error_state(true, false);
         }
@@ -726,12 +850,22 @@ static void can_tx_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
+
         const obd_request_t *req = &k_request_sequence[request_index];
-        twai_message_t msg = build_obd_request(req->service, req->pid);
+        twai_message_t msg = build_obd_request(req->header, req->service, req->pid, req->ext_addr);
+
+        // Log fuel requests for debugging
+        if (req->header == METER_REQUEST_ID) {
+            ESP_LOGI(TAG, "TX to 0x%03X: %02X %02X %02X %02X %02X %02X %02X %02X",
+                     msg.identifier,
+                     msg.data[0], msg.data[1], msg.data[2], msg.data[3],
+                     msg.data[4], msg.data[5], msg.data[6], msg.data[7]);
+        }
+
         esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(50));
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "OBD request 0x%02X 0x%02X failed: %s",
-                     req->service, req->pid, esp_err_to_name(err));
+            ESP_LOGW(TAG, "OBD request 0x%03X 0x%02X 0x%02X (ext:0x%02X) failed: %s",
+                     req->header, req->service, req->pid, req->ext_addr, esp_err_to_name(err));
             update_can_error_state(false, true);
         }
 
@@ -865,8 +999,11 @@ static void diag_page_on_update(dm_page_t *page)
 
 typedef struct {
     int page_index;
-    lv_obj_t *atf_value;
+    lv_obj_t *atf_pan_value;
+    lv_obj_t *atf_tqc_value;
+    lv_obj_t *tqc_lockup_value;
     lv_obj_t *gear_value;
+    lv_obj_t *fuel_value;
     lv_obj_t *odo_value;
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
@@ -900,14 +1037,23 @@ static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
 
     lv_obj_t *grid = create_metrics_grid(page->container);
 
-    lv_obj_t *card = create_metric_card(grid, "ATF Pan (C)", &data->atf_value);
-    lv_obj_set_size(card, LV_PCT(31), 120);
+    lv_obj_t *card = create_metric_card(grid, "ATF Pan (C)", &data->atf_pan_value);
+    lv_obj_set_size(card, LV_PCT(31), 110);
+
+    card = create_metric_card(grid, "ATF TQC (C)", &data->atf_tqc_value);
+    lv_obj_set_size(card, LV_PCT(31), 110);
+
+    card = create_metric_card(grid, "TQC Lockup", &data->tqc_lockup_value);
+    lv_obj_set_size(card, LV_PCT(31), 110);
 
     card = create_metric_card(grid, "Gear", &data->gear_value);
-    lv_obj_set_size(card, LV_PCT(31), 120);
+    lv_obj_set_size(card, LV_PCT(31), 110);
+
+    card = create_metric_card(grid, "Fuel (gal)", &data->fuel_value);
+    lv_obj_set_size(card, LV_PCT(31), 110);
 
     card = create_metric_card(grid, "Odometer (km)", &data->odo_value);
-    lv_obj_set_size(card, LV_PCT(31), 120);
+    lv_obj_set_size(card, LV_PCT(31), 110);
 
     create_nav_bar(page->container, &data->can_toggle_label);
     s_fourrunner_can_toggle_label = data->can_toggle_label;
@@ -956,7 +1102,21 @@ static void fourrunner_page_on_update(dm_page_t *page)
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->atf_value, buf);
+    lv_label_set_text(data->atf_pan_value, buf);
+
+    if (snap.atf_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.atf_tqc_c);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->atf_tqc_value, buf);
+
+    if (snap.gear_valid) {
+        snprintf(buf, sizeof(buf), "%s", snap.tqc_lockup ? "ON" : "OFF");
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->tqc_lockup_value, buf);
 
     if (snap.gear_valid) {
         snprintf(buf, sizeof(buf), "%d", snap.gear);
@@ -964,6 +1124,13 @@ static void fourrunner_page_on_update(dm_page_t *page)
         snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(data->gear_value, buf);
+
+    if (snap.fuel_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.fli_vol_gal);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->fuel_value, buf);
 
     if (snap.odo_valid) {
         snprintf(buf, sizeof(buf), "%lu", (unsigned long)snap.odo_km);
@@ -999,6 +1166,187 @@ static dm_page_t *fourrunner_page_create(void)
     );
 }
 
+typedef struct {
+    int page_index;
+    lv_obj_t *tire_fl_psi_value;
+    lv_obj_t *tire_fr_psi_value;
+    lv_obj_t *tire_rl_psi_value;
+    lv_obj_t *tire_rr_psi_value;
+    lv_obj_t *tire_fl_kph_value;
+    lv_obj_t *tire_fr_kph_value;
+    lv_obj_t *tire_rl_kph_value;
+    lv_obj_t *tire_rr_kph_value;
+    lv_obj_t *page_counter;
+    lv_obj_t *error_label;
+    lv_obj_t *can_toggle_label;
+} tire_page_data_t;
+
+static void tire_page_on_create(dm_page_t *page, lv_obj_t *parent)
+{
+    tire_page_data_t *data = (tire_page_data_t *)calloc(1, sizeof(tire_page_data_t));
+    if (!data) {
+        return;
+    }
+
+    data->page_index = 2;
+
+    page->user_data = data;
+    page->container = lv_obj_create(parent);
+    lv_obj_set_size(page->container, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(page->container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(page->container, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(page->container, 14, 0);
+    lv_obj_set_style_pad_row(page->container, 8, 0);
+    apply_page_theme(page->container);
+    lv_obj_add_flag(page->container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(page->container, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    create_header_block(page->container, "Tire Data", "Pressure & Speed",
+                        &data->page_counter, &data->error_label);
+    s_tire_error_label = data->error_label;
+
+    lv_obj_t *grid = create_metrics_grid(page->container);
+
+    lv_obj_t *card = create_metric_card(grid, "FL PSI", &data->tire_fl_psi_value);
+    lv_obj_set_size(card, LV_PCT(23), 100);
+
+    card = create_metric_card(grid, "FR PSI", &data->tire_fr_psi_value);
+    lv_obj_set_size(card, LV_PCT(23), 100);
+
+    card = create_metric_card(grid, "RL PSI", &data->tire_rl_psi_value);
+    lv_obj_set_size(card, LV_PCT(23), 100);
+
+    card = create_metric_card(grid, "RR PSI", &data->tire_rr_psi_value);
+    lv_obj_set_size(card, LV_PCT(23), 100);
+
+    card = create_metric_card(grid, "FL km/h", &data->tire_fl_kph_value);
+    lv_obj_set_size(card, LV_PCT(23), 100);
+
+    card = create_metric_card(grid, "FR km/h", &data->tire_fr_kph_value);
+    lv_obj_set_size(card, LV_PCT(23), 100);
+
+    card = create_metric_card(grid, "RL km/h", &data->tire_rl_kph_value);
+    lv_obj_set_size(card, LV_PCT(23), 100);
+
+    card = create_metric_card(grid, "RR km/h", &data->tire_rr_kph_value);
+    lv_obj_set_size(card, LV_PCT(23), 100);
+
+    create_nav_bar(page->container, &data->can_toggle_label);
+    s_tire_can_toggle_label = data->can_toggle_label;
+
+    page->is_created = true;
+}
+
+static void tire_page_on_destroy(dm_page_t *page)
+{
+    if (page->user_data) {
+        free(page->user_data);
+    }
+}
+
+static void tire_page_on_show(dm_page_t *page)
+{
+    tire_page_data_t *data = (tire_page_data_t *)page->user_data;
+    if (!data) {
+        return;
+    }
+
+    s_active_page = data->page_index;
+    lv_obj_clear_flag(page->container, LV_OBJ_FLAG_HIDDEN);
+    update_page_counter(data->page_counter, data->page_index);
+}
+
+static void tire_page_on_hide(dm_page_t *page)
+{
+    lv_obj_add_flag(page->container, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void tire_page_on_update(dm_page_t *page)
+{
+    tire_page_data_t *data = (tire_page_data_t *)page->user_data;
+    if (!data) {
+        return;
+    }
+
+    can_metrics_t snap = {};
+    metrics_get_snapshot(&snap);
+
+    char buf[48];
+
+    // Tire pressures
+    if (snap.tire_pressure_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.tire_fl_psi);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->tire_fl_psi_value, buf);
+
+    if (snap.tire_pressure_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.tire_fr_psi);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->tire_fr_psi_value, buf);
+
+    if (snap.tire_pressure_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.tire_rl_psi);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->tire_rl_psi_value, buf);
+
+    if (snap.tire_pressure_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.tire_rr_psi);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->tire_rr_psi_value, buf);
+
+    // Wheel speeds
+    if (snap.wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.tire_fl_kph);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->tire_fl_kph_value, buf);
+
+    if (snap.wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.tire_fr_kph);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->tire_fr_kph_value, buf);
+
+    if (snap.wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.tire_rl_kph);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->tire_rl_kph_value, buf);
+
+    if (snap.wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.tire_rr_kph);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->tire_rr_kph_value, buf);
+
+    update_page_counter(data->page_counter, data->page_index);
+}
+
+static dm_page_t *tire_page_create(void)
+{
+    return page_create(
+        "Tire Pressure",
+        tire_page_on_create,
+        tire_page_on_destroy,
+        tire_page_on_show,
+        tire_page_on_hide,
+        tire_page_on_update
+    );
+}
+
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "4Runner CAN Bus Display starting");
@@ -1020,11 +1368,20 @@ extern "C" void app_main(void)
         xSemaphoreGive(s_can_state_mutex);
     }
 
-    ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
+    // Initialize TWAI driver with old API
+    esp_err_t twai_err = twai_driver_install(&g_config, &t_config, &f_config);
+    if (twai_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to install TWAI driver: %s", esp_err_to_name(twai_err));
+        return;
+    }
     ESP_LOGI(TAG, "TWAI driver installed");
 
-    ESP_ERROR_CHECK(twai_start());
-    ESP_LOGI(TAG, "TWAI driver started");
+    twai_err = twai_start();
+    if (twai_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start TWAI: %s", esp_err_to_name(twai_err));
+        return;
+    }
+    ESP_LOGI(TAG, "TWAI started");
 
     display_config_t display_config = {
         .h_res = lcd_h_res,
@@ -1079,6 +1436,7 @@ extern "C" void app_main(void)
 
     dm_page_t *diag_page = diag_page_create();
     dm_page_t *fourrunner_page = fourrunner_page_create();
+    dm_page_t *tire_page = tire_page_create();
 
     if (diag_page) {
         display_manager_add_page(s_display, diag_page);
@@ -1090,6 +1448,11 @@ extern "C" void app_main(void)
         s_page_count++;
     }
 
+    if (tire_page) {
+        display_manager_add_page(s_display, tire_page);
+        s_page_count++;
+    }
+
     if (s_page_count > 0) {
         s_active_page = 0;
         display_manager_switch_to_page(s_display, s_active_page);
@@ -1097,4 +1460,5 @@ extern "C" void app_main(void)
 
     xTaskCreatePinnedToCore(can_rx_task, "CAN_RX", 4096, NULL, 5, NULL, tskNO_AFFINITY);
     xTaskCreatePinnedToCore(can_tx_task, "CAN_TX", 4096, NULL, 4, NULL, tskNO_AFFINITY);
+    ESP_LOGI(TAG, "CAN tasks started");
 }

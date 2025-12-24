@@ -34,7 +34,7 @@ static const char *TAG = "4RUNNER_CAN";
 
 #define ABS_REQUEST_ID 0x7B0
 #define METER_REQUEST_ID 0x7C0
-#define TPMS_BROADCAST_ID 0x0AA
+#define WHEEL_SPEED_BROADCAST_ID 0x0AA
 
 #define OBD_POLL_INTERVAL_MS 150
 
@@ -93,14 +93,16 @@ typedef struct {
     uint32_t odo_km;
     int gear;
     bool tqc_lockup;
-    float tire_fl_psi;
-    float tire_fr_psi;
-    float tire_rl_psi;
-    float tire_rr_psi;
-    float tire_fl_kph;
-    float tire_fr_kph;
-    float tire_rl_kph;
-    float tire_rr_kph;
+    // Diagnostic wheel speeds (from 0x7B0 PID 0x03)
+    float diag_wheel_fl_kph;
+    float diag_wheel_fr_kph;
+    float diag_wheel_rl_kph;
+    float diag_wheel_rr_kph;
+    // Broadcast wheel speeds (from 0x0AA)
+    float bcast_wheel_fl_kph;
+    float bcast_wheel_fr_kph;
+    float bcast_wheel_rl_kph;
+    float bcast_wheel_rr_kph;
     bool rpm_valid;
     bool vbatt_valid;
     bool iat_valid;
@@ -109,8 +111,8 @@ typedef struct {
     bool fuel_valid;
     bool odo_valid;
     bool gear_valid;
-    bool tire_pressure_valid;
-    bool wheel_speed_valid;
+    bool diag_wheel_speed_valid;
+    bool bcast_wheel_speed_valid;
 } can_metrics_t;
 
 static SemaphoreHandle_t s_metrics_mutex = NULL;
@@ -148,9 +150,9 @@ static const obd_request_t k_request_sequence[] = {
     {OBD_REQUEST_ID, 0x21, 0x82, 0},
     {OBD_REQUEST_ID, 0x21, 0x85, 0},
     {OBD_REQUEST_ID, 0x21, 0x28, 0},
-    // TPMS data is broadcast on 0x0AA - no request needed
     {METER_REQUEST_ID, 0x21, 0x29, 0},  // Fuel level
-    {ABS_REQUEST_ID, 0x21, 0x03, 0},  // Wheel speeds
+    {ABS_REQUEST_ID, 0x21, 0x03, 0},    // Wheel speeds (diagnostic)
+    // Note: 0x0AA broadcasts wheel speeds passively - no request needed
 };
 
 static const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
@@ -627,7 +629,7 @@ static bool is_obd_response_id(uint32_t identifier)
     return (identifier >= OBD_RESPONSE_ID_MIN && identifier <= OBD_RESPONSE_ID_MAX) ||
            (identifier == 0x7B8) ||  // ABS ECU response
            (identifier == 0x7C8) ||  // Meter ECU response
-           (identifier == TPMS_BROADCAST_ID);  // TPMS broadcast
+           (identifier == WHEEL_SPEED_BROADCAST_ID);  // Wheel speed broadcast
 }
 
 static void handle_standard_response(const twai_message_t *msg)
@@ -675,28 +677,30 @@ static void handle_standard_response(const twai_message_t *msg)
     xSemaphoreGive(s_metrics_mutex);
 }
 
-static void handle_tpms_broadcast(const twai_message_t *msg)
+static void handle_broadcast_wheel_speed(const twai_message_t *msg)
 {
-    // TPMS is broadcast on 0x0AA
-    // Format: [status1, tire1, status2, tire2, status3, tire3, status4, tire4]
-    // PSI = raw_value / 2.0
+    // Wheel speed is broadcast on 0x0AA
+    // Format: 4x 16-bit big-endian values (one per wheel)
+    // [W1_hi, W1_lo, W2_hi, W2_lo, W3_hi, W3_lo, W4_hi, W4_lo]
+    // km/h = raw_value / 100.0
     if (msg->data_length_code < 8) {
         return;
     }
 
     xSemaphoreTake(s_metrics_mutex, portMAX_DELAY);
 
-    // Tire pressures are in bytes 1, 3, 5, 7 (odd bytes)
-    // Need to determine which tire is which (FL, FR, RL, RR)
-    s_metrics.tire_fl_psi = msg->data[1] / 2.0f;
-    s_metrics.tire_fr_psi = msg->data[3] / 2.0f;
-    s_metrics.tire_rl_psi = msg->data[5] / 2.0f;
-    s_metrics.tire_rr_psi = msg->data[7] / 2.0f;
-    s_metrics.tire_pressure_valid = true;
+    // Parse 16-bit big-endian wheel speed values
+    // Wheel order assumed same as diagnostic: FR, FL, RR, RL
+    uint16_t raw_fr = ((uint16_t)msg->data[0] << 8) | msg->data[1];
+    uint16_t raw_fl = ((uint16_t)msg->data[2] << 8) | msg->data[3];
+    uint16_t raw_rr = ((uint16_t)msg->data[4] << 8) | msg->data[5];
+    uint16_t raw_rl = ((uint16_t)msg->data[6] << 8) | msg->data[7];
 
-    ESP_LOGI(TAG, "TPMS: FL=%.1f FR=%.1f RL=%.1f RR=%.1f PSI",
-             s_metrics.tire_fl_psi, s_metrics.tire_fr_psi,
-             s_metrics.tire_rl_psi, s_metrics.tire_rr_psi);
+    s_metrics.bcast_wheel_fr_kph = raw_fr / 100.0f;
+    s_metrics.bcast_wheel_fl_kph = raw_fl / 100.0f;
+    s_metrics.bcast_wheel_rr_kph = raw_rr / 100.0f;
+    s_metrics.bcast_wheel_rl_kph = raw_rl / 100.0f;
+    s_metrics.bcast_wheel_speed_valid = true;
 
     xSemaphoreGive(s_metrics_mutex);
 }
@@ -747,25 +751,14 @@ static void handle_extended_response(const twai_message_t *msg)
             }
             break;
         }
-        case 0x30: {
-            if (length >= 7) {
-                // Single-frame TPMS response (if it ever happens)
-                s_metrics.tire_fl_psi = ((msg->data[3] / 58.0f) - 0.5f) * 14.5038f;
-                s_metrics.tire_fr_psi = ((msg->data[4] / 58.0f) - 0.5f) * 14.5038f;
-                s_metrics.tire_rl_psi = ((msg->data[5] / 58.0f) - 0.5f) * 14.5038f;
-                s_metrics.tire_rr_psi = ((msg->data[6] / 58.0f) - 0.5f) * 14.5038f;
-                s_metrics.tire_pressure_valid = true;
-            }
-            break;
-        }
         case 0x03: {
             if (length >= 7) {
-                // Wheel speeds: (raw * 256) / 200 kph
-                s_metrics.tire_fr_kph = (msg->data[3] * 256.0f) / 200.0f;
-                s_metrics.tire_fl_kph = (msg->data[4] * 256.0f) / 200.0f;
-                s_metrics.tire_rr_kph = (msg->data[5] * 256.0f) / 200.0f;
-                s_metrics.tire_rl_kph = (msg->data[6] * 256.0f) / 200.0f;
-                s_metrics.wheel_speed_valid = true;
+                // Diagnostic wheel speeds: (raw * 256) / 200 kph
+                s_metrics.diag_wheel_fr_kph = (msg->data[3] * 256.0f) / 200.0f;
+                s_metrics.diag_wheel_fl_kph = (msg->data[4] * 256.0f) / 200.0f;
+                s_metrics.diag_wheel_rr_kph = (msg->data[5] * 256.0f) / 200.0f;
+                s_metrics.diag_wheel_rl_kph = (msg->data[6] * 256.0f) / 200.0f;
+                s_metrics.diag_wheel_speed_valid = true;
             }
             break;
         }
@@ -782,9 +775,9 @@ static void process_obd_response(const twai_message_t *msg)
         return;
     }
 
-    // Handle TPMS broadcast (0x0AA)
-    if (msg->identifier == TPMS_BROADCAST_ID) {
-        handle_tpms_broadcast(msg);
+    // Handle wheel speed broadcast (0x0AA)
+    if (msg->identifier == WHEEL_SPEED_BROADCAST_ID) {
+        handle_broadcast_wheel_speed(msg);
         return;
     }
 
@@ -1168,14 +1161,16 @@ static dm_page_t *fourrunner_page_create(void)
 
 typedef struct {
     int page_index;
-    lv_obj_t *tire_fl_psi_value;
-    lv_obj_t *tire_fr_psi_value;
-    lv_obj_t *tire_rl_psi_value;
-    lv_obj_t *tire_rr_psi_value;
-    lv_obj_t *tire_fl_kph_value;
-    lv_obj_t *tire_fr_kph_value;
-    lv_obj_t *tire_rl_kph_value;
-    lv_obj_t *tire_rr_kph_value;
+    // Diagnostic wheel speeds (from 0x7B0 PID 0x03)
+    lv_obj_t *diag_fl_value;
+    lv_obj_t *diag_fr_value;
+    lv_obj_t *diag_rl_value;
+    lv_obj_t *diag_rr_value;
+    // Broadcast wheel speeds (from 0x0AA)
+    lv_obj_t *bcast_fl_value;
+    lv_obj_t *bcast_fr_value;
+    lv_obj_t *bcast_rl_value;
+    lv_obj_t *bcast_rr_value;
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
     lv_obj_t *can_toggle_label;
@@ -1202,34 +1197,36 @@ static void tire_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(page->container, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    create_header_block(page->container, "Tire Data", "Pressure & Speed",
+    create_header_block(page->container, "Wheel Speed", "Diagnostic vs Broadcast",
                         &data->page_counter, &data->error_label);
     s_tire_error_label = data->error_label;
 
     lv_obj_t *grid = create_metrics_grid(page->container);
 
-    lv_obj_t *card = create_metric_card(grid, "FL PSI", &data->tire_fl_psi_value);
+    // Row 1: Diagnostic wheel speeds (from 0x7B0 PID 0x03)
+    lv_obj_t *card = create_metric_card(grid, "Diag FL", &data->diag_fl_value);
     lv_obj_set_size(card, LV_PCT(23), 100);
 
-    card = create_metric_card(grid, "FR PSI", &data->tire_fr_psi_value);
+    card = create_metric_card(grid, "Diag FR", &data->diag_fr_value);
     lv_obj_set_size(card, LV_PCT(23), 100);
 
-    card = create_metric_card(grid, "RL PSI", &data->tire_rl_psi_value);
+    card = create_metric_card(grid, "Diag RL", &data->diag_rl_value);
     lv_obj_set_size(card, LV_PCT(23), 100);
 
-    card = create_metric_card(grid, "RR PSI", &data->tire_rr_psi_value);
+    card = create_metric_card(grid, "Diag RR", &data->diag_rr_value);
     lv_obj_set_size(card, LV_PCT(23), 100);
 
-    card = create_metric_card(grid, "FL km/h", &data->tire_fl_kph_value);
+    // Row 2: Broadcast wheel speeds (from 0x0AA)
+    card = create_metric_card(grid, "Bcast FL", &data->bcast_fl_value);
     lv_obj_set_size(card, LV_PCT(23), 100);
 
-    card = create_metric_card(grid, "FR km/h", &data->tire_fr_kph_value);
+    card = create_metric_card(grid, "Bcast FR", &data->bcast_fr_value);
     lv_obj_set_size(card, LV_PCT(23), 100);
 
-    card = create_metric_card(grid, "RL km/h", &data->tire_rl_kph_value);
+    card = create_metric_card(grid, "Bcast RL", &data->bcast_rl_value);
     lv_obj_set_size(card, LV_PCT(23), 100);
 
-    card = create_metric_card(grid, "RR km/h", &data->tire_rr_kph_value);
+    card = create_metric_card(grid, "Bcast RR", &data->bcast_rr_value);
     lv_obj_set_size(card, LV_PCT(23), 100);
 
     create_nav_bar(page->container, &data->can_toggle_label);
@@ -1274,63 +1271,63 @@ static void tire_page_on_update(dm_page_t *page)
 
     char buf[48];
 
-    // Tire pressures
-    if (snap.tire_pressure_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.tire_fl_psi);
+    // Diagnostic wheel speeds (from 0x7B0 PID 0x03)
+    if (snap.diag_wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.diag_wheel_fl_kph);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->tire_fl_psi_value, buf);
+    lv_label_set_text(data->diag_fl_value, buf);
 
-    if (snap.tire_pressure_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.tire_fr_psi);
+    if (snap.diag_wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.diag_wheel_fr_kph);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->tire_fr_psi_value, buf);
+    lv_label_set_text(data->diag_fr_value, buf);
 
-    if (snap.tire_pressure_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.tire_rl_psi);
+    if (snap.diag_wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.diag_wheel_rl_kph);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->tire_rl_psi_value, buf);
+    lv_label_set_text(data->diag_rl_value, buf);
 
-    if (snap.tire_pressure_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.tire_rr_psi);
+    if (snap.diag_wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.diag_wheel_rr_kph);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->tire_rr_psi_value, buf);
+    lv_label_set_text(data->diag_rr_value, buf);
 
-    // Wheel speeds
-    if (snap.wheel_speed_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.tire_fl_kph);
+    // Broadcast wheel speeds (from 0x0AA)
+    if (snap.bcast_wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.bcast_wheel_fl_kph);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->tire_fl_kph_value, buf);
+    lv_label_set_text(data->bcast_fl_value, buf);
 
-    if (snap.wheel_speed_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.tire_fr_kph);
+    if (snap.bcast_wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.bcast_wheel_fr_kph);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->tire_fr_kph_value, buf);
+    lv_label_set_text(data->bcast_fr_value, buf);
 
-    if (snap.wheel_speed_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.tire_rl_kph);
+    if (snap.bcast_wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.bcast_wheel_rl_kph);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->tire_rl_kph_value, buf);
+    lv_label_set_text(data->bcast_rl_value, buf);
 
-    if (snap.wheel_speed_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.tire_rr_kph);
+    if (snap.bcast_wheel_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.bcast_wheel_rr_kph);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->tire_rr_kph_value, buf);
+    lv_label_set_text(data->bcast_rr_value, buf);
 
     update_page_counter(data->page_counter, data->page_index);
 }
@@ -1338,7 +1335,7 @@ static void tire_page_on_update(dm_page_t *page)
 static dm_page_t *tire_page_create(void)
 {
     return page_create(
-        "Tire Pressure",
+        "Wheel Speed",
         tire_page_on_create,
         tire_page_on_destroy,
         tire_page_on_show,

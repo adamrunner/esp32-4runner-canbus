@@ -18,6 +18,7 @@
 
 #include "can_logger.h"
 #include "sd_card.h"
+#include "rtc_pcf85063a.h"
 
 static const char *TAG = "can_logger";
 
@@ -131,9 +132,19 @@ static esp_err_t buffer_write(const char *data, size_t len)
 
 static void format_and_write_message(const ring_buffer_item_t *item)
 {
-    char line[128];
+    char line[160];
+    char datetime[24] = "";
+
+    // Get wall-clock time if available
+    pcf_datetime_t now;
+    if (pcf_rtc_is_time_valid() && pcf_rtc_get_time(&now) == ESP_OK)
+    {
+        pcf_rtc_format_display(datetime, sizeof(datetime), &now);
+    }
+
     int len = snprintf(line, sizeof(line),
-                       "%lld,%03lX,%d,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X\n",
+                       "%s,%lld,%03lX,%d,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X\n",
+                       datetime,
                        item->timestamp_us,
                        (unsigned long)item->msg.identifier,
                        item->msg.data_length_code,
@@ -154,7 +165,7 @@ static void writer_task(void *arg)
     ESP_LOGI(TAG, "Writer task started");
 
     // Write CSV header
-    const char *header = "timestamp_us,can_id,dlc,b0,b1,b2,b3,b4,b5,b6,b7\n";
+    const char *header = "datetime,timestamp_us,can_id,dlc,b0,b1,b2,b3,b4,b5,b6,b7\n";
     buffer_write(header, strlen(header));
     flush_write_buffer();
 
@@ -281,10 +292,10 @@ esp_err_t can_logger_start(void)
         return ESP_OK;
     }
 
-    // Create new log file
-    s_logger.log_file = sd_card_create_log_file("CAN", "CSV",
-                                                  s_logger.current_file,
-                                                  sizeof(s_logger.current_file));
+    // Create new log file with RTC timestamp in name
+    s_logger.log_file = sd_card_create_log_file_with_timestamp("CAN", "CSV",
+                                                                s_logger.current_file,
+                                                                sizeof(s_logger.current_file));
     if (!s_logger.log_file)
     {
         ESP_LOGE(TAG, "Failed to create log file");

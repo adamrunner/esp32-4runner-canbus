@@ -94,6 +94,21 @@ void *sd_card_create_log_file(const char *prefix, const char *extension,
                                char *out_path, size_t out_path_size);
 
 /**
+ * @brief Create a new file for logging with RTC timestamp
+ *
+ * Creates a new file with RTC timestamp in the name (LOG_20251225_143052.CSV)
+ * Falls back to auto-incrementing name if RTC time is not valid.
+ *
+ * @param prefix File name prefix (e.g., "LOG")
+ * @param extension File extension (e.g., "CSV")
+ * @param out_path Buffer to receive the full path (must be at least 64 bytes)
+ * @param out_path_size Size of out_path buffer
+ * @return FILE pointer on success, NULL on failure
+ */
+void *sd_card_create_log_file_with_timestamp(const char *prefix, const char *extension,
+                                              char *out_path, size_t out_path_size);
+
+/**
  * @brief Close a log file
  *
  * @param file FILE pointer from sd_card_create_log_file

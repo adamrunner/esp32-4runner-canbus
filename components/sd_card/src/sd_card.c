@@ -22,6 +22,7 @@
 #include <sdmmc_cmd.h>
 
 #include "sd_card.h"
+#include "rtc_pcf85063a.h"
 
 static const char *TAG = "sd_card";
 
@@ -306,6 +307,63 @@ void *sd_card_create_log_file(const char *prefix, const char *extension,
     // Create the file path
     snprintf(out_path, out_path_size, "%s/%s_%04d.%s",
              MOUNT_POINT, prefix, next_num, extension);
+
+    FILE *f = fopen(out_path, "w");
+    if (!f)
+    {
+        ESP_LOGE(TAG, "Failed to create log file: %s", out_path);
+        xSemaphoreGive(s_sd_state.mutex);
+        return NULL;
+    }
+
+    ESP_LOGI(TAG, "Created log file: %s", out_path);
+    xSemaphoreGive(s_sd_state.mutex);
+    return f;
+}
+
+void *sd_card_create_log_file_with_timestamp(const char *prefix, const char *extension,
+                                              char *out_path, size_t out_path_size)
+{
+    if (!s_sd_state.mounted || !prefix || !extension || !out_path)
+    {
+        return NULL;
+    }
+
+    // Try to get RTC time
+    pcf_datetime_t time;
+    if (!pcf_rtc_is_time_valid() || pcf_rtc_get_time(&time) != ESP_OK)
+    {
+        // Fall back to auto-incrementing names
+        ESP_LOGW(TAG, "RTC time not valid, using incrementing filename");
+        return sd_card_create_log_file(prefix, extension, out_path, out_path_size);
+    }
+
+    xSemaphoreTake(s_sd_state.mutex, portMAX_DELAY);
+
+    // Format timestamp: YYYYMMDD_HHMMSS
+    char timestamp[20];
+    pcf_rtc_format_filename(timestamp, sizeof(timestamp), &time);
+
+    // Create the file path with timestamp
+    snprintf(out_path, out_path_size, "%s/%s_%s.%s",
+             MOUNT_POINT, prefix, timestamp, extension);
+
+    // Check if file already exists (unlikely but possible if creating
+    // multiple files in the same second)
+    struct stat st;
+    if (stat(out_path, &st) == 0)
+    {
+        // File exists, append a counter
+        for (int i = 1; i <= 99; i++)
+        {
+            snprintf(out_path, out_path_size, "%s/%s_%s_%02d.%s",
+                     MOUNT_POINT, prefix, timestamp, i, extension);
+            if (stat(out_path, &st) != 0)
+            {
+                break;
+            }
+        }
+    }
 
     FILE *f = fopen(out_path, "w");
     if (!f)

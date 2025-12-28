@@ -125,6 +125,18 @@ int display_manager_get_page_count(display_manager_handle_t dm_handle);
  */
 void display_manager_update(display_manager_handle_t dm_handle);
 
+/**
+ * @brief Start the LVGL task
+ *
+ * Call this AFTER adding all pages to avoid race conditions between
+ * page creation and LVGL's timer handler. If not called explicitly,
+ * the task will NOT be started automatically.
+ *
+ * @param dm_handle Handle to the display manager
+ * @return true on success, false on failure
+ */
+bool display_manager_start(display_manager_handle_t dm_handle);
+
 #ifdef __cplusplus
 }
 #endif

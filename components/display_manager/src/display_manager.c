@@ -372,20 +372,9 @@ display_manager_handle_t display_manager_init(const display_config_t *config)
 
     dm->ui_timer = lv_timer_create(display_manager_ui_timer_cb, 100, dm);
 
-    BaseType_t task_created = xTaskCreate(
-        display_manager_lvgl_port_task,
-        "LVGL",
-        8192,
-        dm,
-        2,
-        &dm->lvgl_task_handle
-    );
-
-    if (task_created != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to create LVGL task");
-        free(dm);
-        return NULL;
-    }
+    // Note: LVGL task is NOT started here. Call display_manager_start() after
+    // adding all pages to avoid race conditions between page creation and
+    // LVGL's timer handler.
 
     return dm;
 }
@@ -668,4 +657,34 @@ static void display_manager_apply_orientation(struct display_manager *dm)
 
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(dm->panel_handle, swap_xy));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(dm->panel_handle, mirror_x, mirror_y));
+}
+
+bool display_manager_start(display_manager_handle_t dm_handle)
+{
+    if (!dm_handle) {
+        return false;
+    }
+
+    if (dm_handle->lvgl_task_handle) {
+        ESP_LOGW(TAG, "LVGL task already started");
+        return true;
+    }
+
+    ESP_LOGI(TAG, "Starting LVGL task");
+
+    BaseType_t task_created = xTaskCreate(
+        display_manager_lvgl_port_task,
+        "LVGL",
+        8192,
+        dm_handle,
+        2,
+        &dm_handle->lvgl_task_handle
+    );
+
+    if (task_created != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to create LVGL task");
+        return false;
+    }
+
+    return true;
 }

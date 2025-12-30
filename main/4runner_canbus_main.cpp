@@ -240,7 +240,7 @@ static void handle_broadcast_wheel_speed(const twai_message_t *msg)
     uint16_t raw_rr = ((uint16_t)msg->data[4] << 8) | msg->data[5];
     uint16_t raw_rl = ((uint16_t)msg->data[6] << 8) | msg->data[7];
 
-    static const int16_t k_wheel_speed_offset = 6750;
+    static const int16_t k_wheel_speed_offset = 6770;
     m->bcast_wheel_fr_kph = ((int16_t)raw_fr - k_wheel_speed_offset) / 100.0f;
     m->bcast_wheel_fl_kph = ((int16_t)raw_fl - k_wheel_speed_offset) / 100.0f;
     m->bcast_wheel_rr_kph = ((int16_t)raw_rr - k_wheel_speed_offset) / 100.0f;

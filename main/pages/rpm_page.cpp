@@ -80,16 +80,16 @@ static void rpm_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_t *card = create_metric_card(grid, "Diag RPM", &data->diag_rpm_value);
     lv_obj_set_size(card, LV_PCT(98), 90);
 
-    card = create_metric_card(grid, "Test 1 (b4-5/32)", &data->bcast_rpm_1_value);
+    card = create_metric_card(grid, "Test 1 (b2×8)", &data->bcast_rpm_1_value);
     lv_obj_set_size(card, LV_PCT(48), 90);
 
-    card = create_metric_card(grid, "Test 2 (b4-5/64)", &data->bcast_rpm_2_value);
+    card = create_metric_card(grid, "Test 2 (b4×8)", &data->bcast_rpm_2_value);
     lv_obj_set_size(card, LV_PCT(48), 90);
 
-    card = create_metric_card(grid, "Test 3 (b6-7/32)", &data->bcast_rpm_3_value);
+    card = create_metric_card(grid, "Test 3 (b7×8)", &data->bcast_rpm_3_value);
     lv_obj_set_size(card, LV_PCT(48), 90);
 
-    card = create_metric_card(grid, "Test 4 (b6-7/64)", &data->bcast_rpm_4_value);
+    card = create_metric_card(grid, "Test 4 (b4-5 LE/8)", &data->bcast_rpm_4_value);
     lv_obj_set_size(card, LV_PCT(48), 90);
 
     create_nav_bar(page->container, &data->can_toggle_label);

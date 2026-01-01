@@ -60,7 +60,7 @@ static void log_lvgl_mem(const char *context)
 #define ABS_REQUEST_ID 0x7B0
 #define METER_REQUEST_ID 0x7C0
 #define WHEEL_SPEED_BROADCAST_ID 0x0AA
-#define RPM_TEST_BROADCAST_ID 0x024
+#define RPM_TEST_BROADCAST_ID 0x2C1
 
 #define OBD_POLL_INTERVAL_MS 150
 
@@ -259,13 +259,12 @@ static void handle_broadcast_rpm_test(const twai_message_t *msg)
     metrics_lock();
     can_metrics_t *m = metrics_get_for_update();
 
-    uint16_t raw_1 = ((uint16_t)msg->data[4] << 8) | msg->data[5];
-    m->bcast_rpm_1 = raw_1 / 32.0f;
-    m->bcast_rpm_2 = raw_1 / 64.0f;
+    m->bcast_rpm_1 = msg->data[2] * 8.0f;
+    m->bcast_rpm_2 = msg->data[4] * 8.0f;
+    m->bcast_rpm_3 = msg->data[7] * 8.0f;
 
-    uint16_t raw_2 = ((uint16_t)msg->data[6] << 8) | msg->data[7];
-    m->bcast_rpm_3 = raw_2 / 32.0f;
-    m->bcast_rpm_4 = raw_2 / 64.0f;
+    uint16_t raw_16 = ((uint16_t)msg->data[5] << 8) | msg->data[4];
+    m->bcast_rpm_4 = raw_16 * 0.125f;
 
     m->bcast_rpm_valid = true;
 

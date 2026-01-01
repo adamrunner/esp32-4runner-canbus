@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""
+Correlation Analysis
+
+Finds correlations between wheel speeds and other CAN messages to identify
+potential vehicle dynamics broadcasts (RPM, gear, etc).
+"""
+
+import sys
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+
+class CorrelationAnalyzer:
+    """Analyzes correlations between wheel speeds and other CAN messages."""
+
+    def __init__(self, log_file):
+        """Initialize analyzer with a log file path."""
+        self.log_file = Path(log_file)
+        self.df = None
+        self.wheel_speed_msgs = None
+
+    def load_log(self):
+        """Load CSV log file into pandas DataFrame."""
+        print(f"Loading {self.log_file}...")
+        self.df = pd.read_csv(self.log_file, dtype={
+            'timestamp_us': 'int64',
+            'can_id': 'str',
+            'dlc': 'int',
+            'b0': 'str', 'b1': 'str', 'b2': 'str', 'b3': 'str',
+            'b4': 'str', 'b5': 'str', 'b6': 'str', 'b7': 'str'
+        })
+        print(f"Loaded {len(self.df)} messages")
+        return self.df
+
+    def parse_wheel_speeds(self):
+        """Parse wheel speed broadcast messages."""
+        msgs = self.df[self.df['can_id'] == '0AA'].copy()
+        if len(msgs) == 0:
+            print("No wheel speed messages found")
+            return None
+
+        # Parse 16-bit big-endian wheel speed values
+        msgs['avg_speed'] = msgs.apply(
+            lambda row: (
+                (int(row['b0'], 16) * 256 + int(row['b1'], 16) - 6750) / 100.0 +
+                (int(row['b2'], 16) * 256 + int(row['b3'], 16) - 6750) / 100.0 +
+                (int(row['b4'], 16) * 256 + int(row['b5'], 16) - 6750) / 100.0 +
+                (int(row['b6'], 16) * 256 + int(row['b7'], 16) - 6750) / 100.0
+            ) / 4.0,
+            axis=1
+        )
+
+        msgs['timestamp_ms'] = msgs['timestamp_us'] // 1000
+
+        self.wheel_speed_msgs = msgs
+        return msgs
+
+    def find_speed_correlated_messages(self, window_ms=200):
+        """
+        Find messages that correlate with vehicle speed.
+
+        For each CAN ID, check if the data changes predictably as speed changes.
+        """
+        if self.wheel_speed_msgs is None:
+            self.parse_wheel_speeds()
+
+        print("\n=== Speed-Correlated Messages ===")
+        print("Analyzing messages for correlation with vehicle speed...\n")
+
+        # Create time windows for wheel speed
+        self.wheel_speed_msgs['window'] = (self.wheel_speed_msgs['timestamp_ms'] // window_ms) * window_ms
+        wheel_speed_by_window = self.wheel_speed_msgs.groupby('window')['avg_speed'].mean()
+
+        correlated_ids = {}
+
+        for can_id in self.df['can_id'].unique():
+            if can_id == '0AA':  # Skip wheel speed broadcast itself
+                continue
+
+            msgs = self.df[self.df['can_id'] == can_id].copy()
+            if len(msgs) < 100:
+                continue
+
+            msgs['timestamp_ms'] = msgs['timestamp_us'] // 1000
+
+            # Calculate correlation with wheel speed for each byte
+            correlations = []
+            for i in range(8):
+                byte_col = f'b{i}'
+
+                # Group by time window and calculate mean values
+                msgs['window'] = (msgs['timestamp_ms'] // window_ms) * window_ms
+                byte_by_window = msgs.groupby('window)[byte_col].apply(
+                    lambda x: x.apply(lambda v: int(v, 16) if pd.notna(v) and v != '' else 0).mean()
+                )
+
+                # Align windows
+                common_windows = sorted(set(wheel_speed_by_window.index) & set(byte_by_window.index))
+                if len(common_windows) < 10:
+                    continue
+
+                wheel_speeds = wheel_speed_by_window[common_windows].values
+                byte_values = byte_by_window[common_windows].values
+
+                # Calculate correlation
+                if np.std(wheel_speeds) > 0 and np.std(byte_values) > 0:
+                    corr = np.corrcoef(wheel_speeds, byte_values)[0, 1]
+                    if not np.isnan(corr):
+                        correlations.append({
+                            'byte': i,
+                            'correlation': abs(corr),
+                            'byte_mean': byte_values.mean(),
+                            'byte_std': byte_values.std(),
+                            'byte_min': byte_values.min(),
+                            'byte_max': byte_values.max()
+                        })
+
+            if correlations:
+                max_corr = max(correlations, key=lambda x: x['correlation'])
+                if max_corr['correlation'] > 0.7:  # Strong correlation threshold
+                    correlated_ids[can_id] = {
+                        'max_correlation': max_corr['correlation'],
+                        'byte': max_corr['byte'],
+                        'byte_stats': max_corr,
+                        'all_correlations': correlations
+                    }
+
+        # Print results
+        print(f"Found {len(correlated_ids)} messages with strong speed correlation (> 0.7):\n")
+        print(f"{'CAN ID':<10} {'Byte':<6} {'Correlation':>12} {'Range':>12} {'Std':>10}")
+        print("-" * 52)
+
+        sorted_ids = sorted(correlated_ids.items(), key=lambda x: x[1]['max_correlation'], reverse=True)
+        for can_id, info in sorted_ids:
+            stats = info['byte_stats']
+            print(f"{can_id:<10} {stats['byte']:<6} {info['max_correlation']:>12.4f} "
+                  f"{stats['byte_min']:>4}-{stats['byte_max']:<4} {stats['byte_std']:>10.2f}")
+
+        return correlated_ids
+
+    def analyze_message_patterns_by_speed(self, can_id, speed_threshold=30):
+        """
+        Analyze how a specific CAN ID message changes with vehicle speed.
+
+        Compare message patterns when stopped vs moving.
+        """
+        if self.wheel_speed_msgs is None:
+            self.parse_wheel_speeds()
+
+        # Find messages for this CAN ID
+        msgs = self.df[self.df['can_id'] == can_id].copy()
+        if len(msgs) == 0:
+            print(f"No messages found for CAN ID {can_id}")
+            return
+
+        # Add timestamp in milliseconds
+        msgs['timestamp_ms'] = msgs['timestamp_us'] // 1000
+
+        # Merge with wheel speed data to get speed for each message
+        msgs['speed'] = msgs.apply(
+            lambda row: self._get_nearest_wheel_speed(row['timestamp_ms']),
+            axis=1
+        )
+
+        # Split into stopped and moving
+        stopped = msgs[msgs['speed'] < speed_threshold]
+        moving = msgs[msgs['speed'] >= speed_threshold]
+
+        print(f"\n=== Speed Pattern Analysis for CAN ID {can_id} ===")
+        print(f"Total messages: {len(msgs)}")
+        print(f"Stopped (< {speed_threshold} kph): {len(stopped)}")
+        print(f"Moving (>= {speed_threshold} kph): {len(moving)}")
+
+        print(f"\n{'Byte':<6} {'Stopped Min':>12} {'Stopped Max':>12} "
+              f"{'Moving Min':>12} {'Moving Max':>12} {'Diff':>10}")
+        print("-" * 64)
+
+        for i in range(8):
+            byte_col = f'b{i}'
+            stopped_vals = stopped[byte_col].apply(
+                lambda x: int(x, 16) if pd.notna(x) and x != '' else 0
+            )
+            moving_vals = moving[byte_col].apply(
+                lambda x: int(x, 16) if pd.notna(x) and x != '' else 0
+            )
+
+            if len(stopped_vals) == 0 or len(moving_vals) == 0:
+                continue
+
+            stopped_min = stopped_vals.min()
+            stopped_max = stopped_vals.max()
+            moving_min = moving_vals.min()
+            moving_max = moving_vals.max()
+            diff = abs(moving_max - stopped_max) + abs(moving_min - stopped_min)
+
+            print(f"{byte_col:<6} "
+                  f"{stopped_min:>12} {stopped_max:>12} "
+                  f"{moving_min:>12} {moving_max:>12} {diff:>10.2f}")
+
+    def _get_nearest_wheel_speed(self, timestamp_ms):
+        """Get nearest wheel speed value for a given timestamp."""
+        if self.wheel_speed_msgs is None:
+            return 0
+
+        nearest_idx = (self.wheel_speed_msgs['timestamp_ms'] - timestamp_ms).abs().idxmin()
+        return self.wheel_speed_msgs.loc[nearest_idx, 'avg_speed']
+
+    def identify_engine_related_messages(self):
+        """
+        Identify potential engine-related messages (RPM, throttle, etc).
+
+        Engine messages typically show correlation with wheel speed when the vehicle
+        is accelerating/decelerating in a fixed gear.
+        """
+        if self.wheel_speed_msgs is None:
+            self.parse_wheel_speeds()
+
+        print("\n=== Engine-Related Message Candidates ===")
+        print("Looking for messages with patterns suggesting engine data...\n")
+
+        candidates = []
+
+        for can_id in self.df['can_id'].unique():
+            if can_id == '0AA':
+                continue
+
+            msgs = self.df[self.df['can_id'] == can_id].copy()
+            if len(msgs) < 500:
+                continue
+
+            # Check for patterns:
+            # 1. Message rate around 10-100 Hz (typical for engine data)
+            duration_sec = (msgs['timestamp_us'].max() - msgs['timestamp_us'].min()) / 1_000_000
+            msg_rate = len(msgs) / duration_sec
+
+            # 2. Some bytes should have variation (not static)
+            byte_cols = [f'b{i}' for i in range(8)]
+            unique_combos = msgs[byte_cols].drop_duplicates()
+
+            # 3. Some bytes should have reasonable ranges (like 0-255 or 0-65535)
+            max_unique_bytes = 0
+            byte_stats = []
+            for i in range(8):
+                byte_col = f'b{i}'
+                unique_vals = msgs[byte_col].nunique()
+                byte_ints = msgs[byte_col].apply(
+                    lambda x: int(x, 16) if pd.notna(x) and x != '' else 0
+                )
+                byte_stats.append({
+                    'byte': i,
+                    'unique': unique_vals,
+                    'min': byte_ints.min(),
+                    'max': byte_ints.max(),
+                    'std': byte_ints.std()
+                })
+                if unique_vals > max_unique_bytes:
+                    max_unique_bytes = unique_vals
+
+            # Score the message based on criteria
+            score = 0
+            if 5 <= msg_rate <= 100:  # Reasonable update rate
+                score += 2
+            if len(unique_combos) > 10:  # Dynamic data
+                score += 2
+            if max_unique_bytes > 50:  # At least one byte with variation
+                score += 2
+
+            # Check for specific byte patterns
+            for bs in byte_stats:
+                # Bytes with moderate variation (0-255 range) and good frequency
+                if bs['unique'] > 50 and bs['std'] > 5:
+                    score += 1
+                    break
+
+            if score >= 5:
+                candidates.append({
+                    'can_id': can_id,
+                    'score': score,
+                    'msg_rate': msg_rate,
+                    'unique_combos': len(unique_combos),
+                    'byte_stats': byte_stats
+                })
+
+        # Sort by score and print
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+
+        print(f"{'CAN ID':<10} {'Score':>6} {'Rate (Hz)':>10} {'Uniques':>10} {'Notes'}")
+        print("-" * 70)
+
+        for cand in candidates[:15]:
+            notes = ""
+            max_byte = max(cand['byte_stats'], key=lambda x: x['unique'])
+            notes = f"b{max_byte['byte']}: {max_byte['min']}-{max_byte['max']}, {max_byte['unique']} uniq"
+
+            print(f"{cand['can_id']:<10} {cand['score']:>6} "
+                  f"{cand['msg_rate']:>10.2f} {cand['unique_combos']:>10} {notes}")
+
+        return candidates
+
+
+def main():
+    """Main entry point for command-line usage."""
+    if len(sys.argv) < 2:
+        print("Usage: python correlation_analyzer.py <log_file.csv> [options]")
+        print("\nOptions:")
+        print("  --correlation     Find speed-correlated messages")
+        print("  --engine          Identify engine-related candidates")
+        print("  --analyze ID      Analyze specific CAN ID by speed")
+        return
+
+    log_file = sys.argv[1]
+    analyzer = CorrelationAnalyzer(log_file)
+    analyzer.load_log()
+
+    # Parse options
+    i = 2
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+
+        if arg == '--correlation':
+            analyzer.parse_wheel_speeds()
+            analyzer.find_speed_correlated_messages()
+            i += 1
+
+        elif arg == '--engine':
+            analyzer.parse_wheel_speeds()
+            analyzer.identify_engine_related_messages()
+            i += 1
+
+        elif arg == '--analyze':
+            can_id = sys.argv[i+1]
+            analyzer.parse_wheel_speeds()
+            analyzer.analyze_message_patterns_by_speed(can_id)
+            i += 2
+
+        else:
+            print(f"Unknown option: {arg}")
+            sys.exit(1)
+
+    # If no specific analysis requested, run all
+    if len(sys.argv) == 2:
+        analyzer.parse_wheel_speeds()
+        analyzer.find_speed_correlated_messages()
+        analyzer.identify_engine_related_messages()
+
+
+if __name__ == '__main__':
+    main()

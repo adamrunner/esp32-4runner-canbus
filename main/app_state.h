@@ -41,12 +41,22 @@ typedef struct {
     float bcast_wheel_fr_kph;
     float bcast_wheel_rl_kph;
     float bcast_wheel_rr_kph;
-    // Broadcast RPM test decodings (from 0x024)
+    // Broadcast RPM test decodings (from 0x2C1)
     float bcast_rpm_1;
     float bcast_rpm_2;
     float bcast_rpm_3;
     float bcast_rpm_4;
     bool bcast_rpm_valid;
+    // Orientation data (from 0x7B0 PIDs 0x46 and 0x47)
+    float lateral_g;
+    float longitudinal_g;
+    float yaw_rate_deg_sec;
+    float steering_angle_deg;
+    float zp_decel_1;
+    float zp_decel_2;
+    float zp_yaw_rate;
+    bool orientation_valid;
+    bool orientation_zp_valid;
     // Validity flags
     bool rpm_valid;
     bool vbatt_valid;
@@ -186,12 +196,14 @@ extern lv_obj_t *g_diag_error_label;
 extern lv_obj_t *g_fourrunner_error_label;
 extern lv_obj_t *g_tire_error_label;
 extern lv_obj_t *g_rpm_error_label;
+extern lv_obj_t *g_orientation_error_label;
 
 // Global CAN toggle label pointers (set by pages, used by can_ui_update_cb)
 extern lv_obj_t *g_diag_can_toggle_label;
 extern lv_obj_t *g_fourrunner_can_toggle_label;
 extern lv_obj_t *g_tire_can_toggle_label;
 extern lv_obj_t *g_rpm_can_toggle_label;
+extern lv_obj_t *g_orientation_can_toggle_label;
 
 #ifdef __cplusplus
 }

@@ -33,6 +33,7 @@
 #include "logging_page.h"
 #include "rtc_page.h"
 #include "rpm_page.h"
+#include "orientation_page.h"
 
 static const char *TAG = "4RUNNER_CAN";
 
@@ -127,6 +128,8 @@ static const obd_request_t k_request_sequence[] = {
     {OBD_REQUEST_ID, 0x21, 0x28, 0},
     {METER_REQUEST_ID, 0x21, 0x29, 0},
     {ABS_REQUEST_ID, 0x21, 0x03, 0},
+    {ABS_REQUEST_ID, 0x21, 0x46, 0},  // Orientation zero points
+    {ABS_REQUEST_ID, 0x21, 0x47, 0},  // Orientation live data
 };
 
 // TWAI Configuration
@@ -324,6 +327,34 @@ static void handle_extended_response(const twai_message_t *msg)
                 m->diag_wheel_rr_kph = (msg->data[5] * 256.0f) / 200.0f;
                 m->diag_wheel_rl_kph = (msg->data[6] * 256.0f) / 200.0f;
                 m->diag_wheel_speed_valid = true;
+            }
+            break;
+        }
+        case 0x46: {
+            // Orientation zero points (from ABS module 0x7B0)
+            if (length >= 5) {
+                // Zero point of deceleration: value * 0.1961568627 - 25.11 (m/s^2)
+                m->zp_decel_1 = (msg->data[3] * 0.1961568627f) - 25.11f;
+                m->zp_decel_2 = (msg->data[4] * 0.1961568627f) - 25.11f;
+                // Zero point of yaw rate: value - 128 (degrees/sec)
+                m->zp_yaw_rate = (float)msg->data[5] - 128.0f;
+                m->orientation_zp_valid = true;
+            }
+            break;
+        }
+        case 0x47: {
+            // Orientation live data (from ABS module 0x7B0)
+            if (length >= 7) {
+                // Lateral g: signed value / 50 (gravity)
+                m->lateral_g = (int8_t)msg->data[3] / 50.0f;
+                // Longitudinal g: signed value / 50 (gravity)
+                m->longitudinal_g = (int8_t)msg->data[4] / 50.0f;
+                // Yaw rate: value - 128 (degrees/sec)
+                m->yaw_rate_deg_sec = (float)msg->data[5] - 128.0f;
+                // Steering wheel angle: 16-bit value / 10 - 3276.8 (degrees)
+                uint16_t raw_steer = ((uint16_t)msg->data[6] << 8) | msg->data[7];
+                m->steering_angle_deg = (raw_steer / 10.0f) - 3276.8f;
+                m->orientation_valid = true;
             }
             break;
         }
@@ -546,7 +577,7 @@ extern "C" void app_main(void)
     } else {
         ESP_LOGI(TAG, "SD card initialized");
 
-        esp_err_t log_err = can_logger_init(512);
+        esp_err_t log_err = can_logger_init(2048);  // ~2.4 sec buffer at 857 msg/sec
         if (log_err != ESP_OK) {
             ESP_LOGW(TAG, "CAN logger init failed: %s", esp_err_to_name(log_err));
         } else {
@@ -623,6 +654,17 @@ extern "C" void app_main(void)
         page_count++;
         ESP_LOGI(TAG, "RPM page added, heap: %lu", (unsigned long)esp_get_free_heap_size());
         log_lvgl_mem("LVGL after rpm page");
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    ESP_LOGI(TAG, "Creating orientation page...");
+    dm_page_t *orient_page = orientation_page_create();
+    if (orient_page) {
+        ESP_LOGI(TAG, "Adding orientation page...");
+        display_manager_add_page(display, orient_page);
+        page_count++;
+        ESP_LOGI(TAG, "Orientation page added, heap: %lu", (unsigned long)esp_get_free_heap_size());
+        log_lvgl_mem("LVGL after orientation page");
     }
 
     ESP_LOGI(TAG, "All pages created, count=%d", page_count);

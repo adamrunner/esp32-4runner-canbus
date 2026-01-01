@@ -33,12 +33,14 @@ lv_obj_t *g_diag_error_label = NULL;
 lv_obj_t *g_fourrunner_error_label = NULL;
 lv_obj_t *g_tire_error_label = NULL;
 lv_obj_t *g_rpm_error_label = NULL;
+lv_obj_t *g_orientation_error_label = NULL;
 
 // Global CAN toggle label pointers
 lv_obj_t *g_diag_can_toggle_label = NULL;
 lv_obj_t *g_fourrunner_can_toggle_label = NULL;
 lv_obj_t *g_tire_can_toggle_label = NULL;
 lv_obj_t *g_rpm_can_toggle_label = NULL;
+lv_obj_t *g_orientation_can_toggle_label = NULL;
 
 bool app_state_init(void)
 {
@@ -145,6 +147,9 @@ static void can_ui_update_cb(void *arg)
     if (g_rpm_error_label) {
         lv_label_set_text(g_rpm_error_label, indicator);
     }
+    if (g_orientation_error_label) {
+        lv_label_set_text(g_orientation_error_label, indicator);
+    }
 
     const char *toggle_text = snapshot.paused ? "Resume CAN" : "Pause CAN";
     if (g_diag_can_toggle_label) {
@@ -158,6 +163,9 @@ static void can_ui_update_cb(void *arg)
     }
     if (g_rpm_can_toggle_label) {
         lv_label_set_text(g_rpm_can_toggle_label, toggle_text);
+    }
+    if (g_orientation_can_toggle_label) {
+        lv_label_set_text(g_orientation_can_toggle_label, toggle_text);
     }
 }
 

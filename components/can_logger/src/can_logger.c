@@ -28,10 +28,10 @@ typedef struct {
     can_logger_message_t msg;
 } ring_buffer_item_t;
 
-// Write buffer size (characters)
-#define WRITE_BUFFER_SIZE 4096
+// Write buffer size (characters) - sized for ~80 messages at ~100 bytes each
+#define WRITE_BUFFER_SIZE 8192
 #define WRITER_TASK_STACK_SIZE 4096
-#define WRITER_TASK_PRIORITY 3
+#define WRITER_TASK_PRIORITY 5  // Higher priority for keeping up with CAN traffic
 #define FLUSH_INTERVAL_MS 1000
 
 // Module state
@@ -172,16 +172,35 @@ static void writer_task(void *arg)
     while (s_logger.state == CAN_LOGGER_RUNNING)
     {
         size_t item_size = 0;
-        ring_buffer_item_t *item = xRingbufferReceive(s_logger.ring_buffer,
-                                                       &item_size, pdMS_TO_TICKS(100));
+        int messages_processed = 0;
 
-        if (item)
+        // Batch process: drain all available messages without waiting
+        ring_buffer_item_t *item;
+        while ((item = xRingbufferReceive(s_logger.ring_buffer, &item_size, 0)) != NULL)
         {
             format_and_write_message(item);
             vRingbufferReturnItem(s_logger.ring_buffer, item);
+            messages_processed++;
+
+            // Flush write buffer when nearly full (160 = max CSV line size)
+            if (s_logger.write_buffer_pos > WRITE_BUFFER_SIZE - 160)
+            {
+                flush_write_buffer();
+            }
         }
 
-        // Periodic flush
+        // If no messages were available, wait briefly for new ones
+        if (messages_processed == 0)
+        {
+            item = xRingbufferReceive(s_logger.ring_buffer, &item_size, pdMS_TO_TICKS(20));
+            if (item)
+            {
+                format_and_write_message(item);
+                vRingbufferReturnItem(s_logger.ring_buffer, item);
+            }
+        }
+
+        // Periodic flush to ensure data reaches SD card
         int64_t now_ms = esp_timer_get_time() / 1000;
         if (now_ms - s_logger.last_flush_time > FLUSH_INTERVAL_MS)
         {

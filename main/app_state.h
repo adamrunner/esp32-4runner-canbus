@@ -41,6 +41,9 @@ typedef struct {
     float bcast_wheel_fr_kph;
     float bcast_wheel_rl_kph;
     float bcast_wheel_rr_kph;
+    // Vehicle speed
+    float diag_vehicle_speed_kph;   // from OBD-II PID 0x0D
+    float bcast_vehicle_speed_kph;  // from broadcast 0x0B4
     // Broadcast RPM test decodings (from 0x2C1)
     float bcast_rpm_1;
     float bcast_rpm_2;
@@ -68,6 +71,8 @@ typedef struct {
     bool gear_valid;
     bool diag_wheel_speed_valid;
     bool bcast_wheel_speed_valid;
+    bool diag_vehicle_speed_valid;
+    bool bcast_vehicle_speed_valid;
 } can_metrics_t;
 
 // CAN bus state (paused, error, etc.)

@@ -3,7 +3,6 @@
  *
  * Displays vehicle orientation data from ABS module (0x7B0):
  * - PID 0x47: Lateral G, Longitudinal G, Yaw Rate, Steering Angle
- * - PID 0x46: Zero points for deceleration and yaw rate
  */
 
 #include "orientation_page.h"
@@ -23,10 +22,6 @@ typedef struct {
     lv_obj_t *longitudinal_g_value;
     lv_obj_t *yaw_rate_value;
     lv_obj_t *steering_angle_value;
-    // Zero point data (from 0x7B0 PID 0x46)
-    lv_obj_t *zp_decel_1_value;
-    lv_obj_t *zp_decel_2_value;
-    lv_obj_t *zp_yaw_value;
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
     lv_obj_t *can_toggle_label;
@@ -59,28 +54,18 @@ static void orientation_page_on_create(dm_page_t *page, lv_obj_t *parent)
 
     lv_obj_t *grid = create_metrics_grid(page->container);
 
-    // Row 1: Live orientation data (from 0x7B0 PID 0x47)
+    // Live orientation data (from 0x7B0 PID 0x47)
     lv_obj_t *card = create_metric_card(grid, "Lat G", &data->lateral_g_value);
-    lv_obj_set_size(card, LV_PCT(23), 100);
+    lv_obj_set_size(card, LV_PCT(48), 120);
 
     card = create_metric_card(grid, "Long G", &data->longitudinal_g_value);
-    lv_obj_set_size(card, LV_PCT(23), 100);
+    lv_obj_set_size(card, LV_PCT(48), 120);
 
     card = create_metric_card(grid, "Yaw Rate", &data->yaw_rate_value);
-    lv_obj_set_size(card, LV_PCT(23), 100);
+    lv_obj_set_size(card, LV_PCT(48), 120);
 
     card = create_metric_card(grid, "Steer Ang", &data->steering_angle_value);
-    lv_obj_set_size(card, LV_PCT(23), 100);
-
-    // Row 2: Zero point data (from 0x7B0 PID 0x46)
-    card = create_metric_card(grid, "ZP Dec 1", &data->zp_decel_1_value);
-    lv_obj_set_size(card, LV_PCT(30), 100);
-
-    card = create_metric_card(grid, "ZP Dec 2", &data->zp_decel_2_value);
-    lv_obj_set_size(card, LV_PCT(30), 100);
-
-    card = create_metric_card(grid, "ZP Yaw", &data->zp_yaw_value);
-    lv_obj_set_size(card, LV_PCT(30), 100);
+    lv_obj_set_size(card, LV_PCT(48), 120);
 
     create_nav_bar(page->container, &data->can_toggle_label);
     g_orientation_can_toggle_label = data->can_toggle_label;
@@ -152,28 +137,6 @@ static void orientation_page_on_update(dm_page_t *page)
         snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(data->steering_angle_value, buf);
-
-    // Zero point data (from 0x7B0 PID 0x46)
-    if (snap.orientation_zp_valid) {
-        snprintf(buf, sizeof(buf), "%.2f", snap.zp_decel_1);
-    } else {
-        snprintf(buf, sizeof(buf), "--");
-    }
-    lv_label_set_text(data->zp_decel_1_value, buf);
-
-    if (snap.orientation_zp_valid) {
-        snprintf(buf, sizeof(buf), "%.2f", snap.zp_decel_2);
-    } else {
-        snprintf(buf, sizeof(buf), "--");
-    }
-    lv_label_set_text(data->zp_decel_2_value, buf);
-
-    if (snap.orientation_zp_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.zp_yaw_rate);
-    } else {
-        snprintf(buf, sizeof(buf), "--");
-    }
-    lv_label_set_text(data->zp_yaw_value, buf);
 
     update_page_counter(data->page_counter, data->page_index);
 }

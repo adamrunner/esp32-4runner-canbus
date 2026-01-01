@@ -24,6 +24,9 @@ typedef struct {
     lv_obj_t *bcast_fr_value;
     lv_obj_t *bcast_rl_value;
     lv_obj_t *bcast_rr_value;
+    // Vehicle speed
+    lv_obj_t *diag_vehicle_speed_value;   // from OBD-II PID 0x0D
+    lv_obj_t *bcast_vehicle_speed_value;  // from broadcast 0x0B4
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
     lv_obj_t *can_toggle_label;
@@ -81,6 +84,13 @@ static void wheel_speed_page_on_create(dm_page_t *page, lv_obj_t *parent)
 
     card = create_metric_card(grid, "Bcast RR", &data->bcast_rr_value);
     lv_obj_set_size(card, LV_PCT(23), 100);
+
+    // Row 3: Vehicle speed (diagnostic vs broadcast)
+    card = create_metric_card(grid, "Diag Speed", &data->diag_vehicle_speed_value);
+    lv_obj_set_size(card, LV_PCT(48), 100);
+
+    card = create_metric_card(grid, "Bcast Speed", &data->bcast_vehicle_speed_value);
+    lv_obj_set_size(card, LV_PCT(48), 100);
 
     create_nav_bar(page->container, &data->can_toggle_label);
     g_tire_can_toggle_label = data->can_toggle_label;
@@ -181,6 +191,22 @@ static void wheel_speed_page_on_update(dm_page_t *page)
         snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(data->bcast_rr_value, buf);
+
+    // Vehicle speed (diagnostic from OBD-II PID 0x0D)
+    if (snap.diag_vehicle_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.0f kph", snap.diag_vehicle_speed_kph);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->diag_vehicle_speed_value, buf);
+
+    // Vehicle speed (broadcast from 0x0B4)
+    if (snap.bcast_vehicle_speed_valid) {
+        snprintf(buf, sizeof(buf), "%.1f kph", snap.bcast_vehicle_speed_kph);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->bcast_vehicle_speed_value, buf);
 
     update_page_counter(data->page_counter, data->page_index);
 }

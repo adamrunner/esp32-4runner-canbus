@@ -61,6 +61,7 @@ static void log_lvgl_mem(const char *context)
 #define ABS_REQUEST_ID 0x7B0
 #define METER_REQUEST_ID 0x7C0
 #define WHEEL_SPEED_BROADCAST_ID 0x0AA
+#define VEHICLE_SPEED_BROADCAST_ID 0x0B4
 #define RPM_TEST_BROADCAST_ID 0x2C1
 
 #define OBD_POLL_INTERVAL_MS 150
@@ -120,6 +121,7 @@ typedef struct {
 
 static const obd_request_t k_request_sequence[] = {
     {OBD_REQUEST_ID, 0x01, 0x0C, 0},
+    {OBD_REQUEST_ID, 0x01, 0x0D, 0},  // Vehicle speed
     {OBD_REQUEST_ID, 0x01, 0x42, 0},
     {OBD_REQUEST_ID, 0x01, 0x0F, 0},
     {OBD_REQUEST_ID, 0x01, 0x33, 0},
@@ -200,6 +202,14 @@ static void handle_standard_response(const twai_message_t *msg)
             }
             break;
         }
+        case 0x0D: {
+            // Vehicle speed (OBD-II standard: single byte, KPH)
+            if (length >= 3) {
+                m->diag_vehicle_speed_kph = (float)msg->data[3];
+                m->diag_vehicle_speed_valid = true;
+            }
+            break;
+        }
         case 0x42: {
             if (length >= 4) {
                 uint16_t raw = (uint16_t)(msg->data[3] << 8) | msg->data[4];
@@ -249,6 +259,23 @@ static void handle_broadcast_wheel_speed(const twai_message_t *msg)
     m->bcast_wheel_rr_kph = ((int16_t)raw_rr - k_wheel_speed_offset) / 100.0f;
     m->bcast_wheel_rl_kph = ((int16_t)raw_rl - k_wheel_speed_offset) / 100.0f;
     m->bcast_wheel_speed_valid = true;
+
+    metrics_unlock();
+}
+
+static void handle_broadcast_vehicle_speed(const twai_message_t *msg)
+{
+    if (msg->data_length_code < 8) {
+        return;
+    }
+
+    metrics_lock();
+    can_metrics_t *m = metrics_get_for_update();
+
+    // Speed is in bytes 5-6 as big-endian 16-bit, divided by 100 for KPH
+    uint16_t raw_speed = ((uint16_t)msg->data[5] << 8) | msg->data[6];
+    m->bcast_vehicle_speed_kph = raw_speed / 100.0f;
+    m->bcast_vehicle_speed_valid = true;
 
     metrics_unlock();
 }
@@ -373,6 +400,11 @@ static void process_obd_response(const twai_message_t *msg)
 
     if (msg->identifier == WHEEL_SPEED_BROADCAST_ID) {
         handle_broadcast_wheel_speed(msg);
+        return;
+    }
+
+    if (msg->identifier == VEHICLE_SPEED_BROADCAST_ID) {
+        handle_broadcast_vehicle_speed(msg);
         return;
     }
 

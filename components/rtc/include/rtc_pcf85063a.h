@@ -82,6 +82,15 @@ esp_err_t pcf_rtc_get_time(pcf_datetime_t *time);
 esp_err_t pcf_rtc_set_time(const pcf_datetime_t *time);
 
 /**
+ * @brief Sync system time from RTC
+ *
+ * Sets the system time (for file timestamps) using the current RTC value.
+ *
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t pcf_rtc_sync_system_time(void);
+
+/**
  * @brief Format datetime as string for log filenames
  *
  * Formats as: YYYYMMDD_HHMMSS (e.g., "20251225_143052")

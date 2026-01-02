@@ -813,6 +813,10 @@ extern "C" void app_main(void)
         ESP_LOGW(TAG, "RTC init failed: %s", esp_err_to_name(rtc_err));
     } else {
         ESP_LOGI(TAG, "RTC initialized");
+        esp_err_t sync_err = pcf_rtc_sync_system_time();
+        if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "RTC system time sync failed: %s", esp_err_to_name(sync_err));
+        }
     }
 
     // Initialize SD card

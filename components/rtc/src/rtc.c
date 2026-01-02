@@ -7,6 +7,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
+#include <time.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -68,6 +70,56 @@ static uint8_t dec_to_bcd(uint8_t val)
 static uint8_t bcd_to_dec(uint8_t val)
 {
     return (uint8_t)((val / 16 * 10) + (val % 16));
+}
+
+static bool rtc_datetime_to_epoch(const pcf_datetime_t *time, time_t *epoch_out)
+{
+    if (!time || !epoch_out)
+    {
+        return false;
+    }
+
+    struct tm tm_time = {
+        .tm_year = time->year - 1900,
+        .tm_mon = time->month - 1,
+        .tm_mday = time->day,
+        .tm_hour = time->hour,
+        .tm_min = time->min,
+        .tm_sec = time->sec,
+        .tm_isdst = -1
+    };
+
+    time_t epoch = mktime(&tm_time);
+    if (epoch < 0)
+    {
+        return false;
+    }
+
+    *epoch_out = epoch;
+    return true;
+}
+
+static esp_err_t rtc_set_system_time(const pcf_datetime_t *time)
+{
+    time_t epoch = 0;
+    if (!rtc_datetime_to_epoch(time, &epoch))
+    {
+        ESP_LOGE(TAG, "Failed to convert RTC time to epoch");
+        return ESP_FAIL;
+    }
+
+    struct timeval tv = {
+        .tv_sec = epoch,
+        .tv_usec = 0
+    };
+
+    if (settimeofday(&tv, NULL) != 0)
+    {
+        ESP_LOGE(TAG, "Failed to set system time");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
 }
 
 // I2C helper functions
@@ -275,6 +327,45 @@ esp_err_t pcf_rtc_set_time(const pcf_datetime_t *time)
     char display_buf[24];
     pcf_rtc_format_display(display_buf, sizeof(display_buf), time);
     ESP_LOGI(TAG, "RTC time set to: %s", display_buf);
+
+    esp_err_t sync_err = rtc_set_system_time(time);
+    if (sync_err != ESP_OK)
+    {
+        ESP_LOGW(TAG, "System time sync failed after RTC set");
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t pcf_rtc_sync_system_time(void)
+{
+    if (!s_rtc.initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    pcf_datetime_t now;
+    esp_err_t err = pcf_rtc_get_time(&now);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    if (now.year < MIN_VALID_YEAR)
+    {
+        ESP_LOGW(TAG, "RTC time not valid, skipping system time sync");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    err = rtc_set_system_time(&now);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    char display_buf[24];
+    pcf_rtc_format_display(display_buf, sizeof(display_buf), &now);
+    ESP_LOGI(TAG, "System time set from RTC: %s", display_buf);
 
     return ESP_OK;
 }

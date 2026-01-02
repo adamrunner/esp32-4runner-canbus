@@ -29,8 +29,8 @@ typedef struct {
     can_logger_message_t msg;
 } ring_buffer_item_t;
 
-// Write buffer size (characters) - sized for ~320 messages at ~100 bytes each
-#define WRITE_BUFFER_SIZE 32768
+// Write buffer size (characters) - larger buffer for fewer SD writes
+#define WRITE_BUFFER_SIZE 131072
 #define WRITER_TASK_STACK_SIZE 4096
 #define WRITER_TASK_PRIORITY 5  // Higher priority for keeping up with CAN traffic
 #define FLUSH_INTERVAL_MS 1000
@@ -40,6 +40,7 @@ static struct {
     bool initialized;
     can_logger_state_t state;
     RingbufHandle_t ring_buffer;
+    bool ring_buffer_caps_allocated;
     TaskHandle_t writer_task;
     SemaphoreHandle_t stats_mutex;
     void *log_file;
@@ -53,6 +54,7 @@ static struct {
     .initialized = false,
     .state = CAN_LOGGER_STOPPED,
     .ring_buffer = NULL,
+    .ring_buffer_caps_allocated = false,
     .writer_task = NULL,
     .stats_mutex = NULL,
     .log_file = NULL,
@@ -235,7 +237,7 @@ static void writer_task(void *arg)
     vTaskDelete(NULL);
 }
 
-esp_err_t can_logger_init(size_t ring_buffer_size)
+esp_err_t can_logger_init(size_t ring_buffer_bytes)
 {
     if (s_logger.initialized)
     {
@@ -257,12 +259,33 @@ esp_err_t can_logger_init(size_t ring_buffer_size)
         return ESP_ERR_NO_MEM;
     }
 
-    // Create ring buffer
-    size_t buffer_bytes = ring_buffer_size * sizeof(ring_buffer_item_t);
-    s_logger.ring_buffer = xRingbufferCreate(buffer_bytes, RINGBUF_TYPE_NOSPLIT);
+    if (ring_buffer_bytes == 0)
+    {
+        ESP_LOGE(TAG, "Ring buffer size must be > 0");
+        vSemaphoreDelete(s_logger.stats_mutex);
+        s_logger.stats_mutex = NULL;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t buffer_bytes = (ring_buffer_bytes + 3) & ~((size_t)3);
+    s_logger.ring_buffer = xRingbufferCreateWithCaps(
+        buffer_bytes,
+        RINGBUF_TYPE_NOSPLIT,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+    );
+    if (s_logger.ring_buffer)
+    {
+        s_logger.ring_buffer_caps_allocated = true;
+    }
+    else
+    {
+        s_logger.ring_buffer = xRingbufferCreate(buffer_bytes, RINGBUF_TYPE_NOSPLIT);
+        s_logger.ring_buffer_caps_allocated = false;
+    }
+
     if (!s_logger.ring_buffer)
     {
-        ESP_LOGE(TAG, "Failed to create ring buffer");
+        ESP_LOGE(TAG, "Failed to create ring buffer (%zu bytes)", buffer_bytes);
         vSemaphoreDelete(s_logger.stats_mutex);
         s_logger.stats_mutex = NULL;
         return ESP_ERR_NO_MEM;
@@ -287,7 +310,11 @@ esp_err_t can_logger_init(size_t ring_buffer_size)
     s_logger.initialized = true;
     s_logger.state = CAN_LOGGER_STOPPED;
 
-    ESP_LOGI(TAG, "Initialized with %zu message buffer", ring_buffer_size);
+    size_t item_bytes = sizeof(ring_buffer_item_t);
+    size_t item_stride = ((item_bytes + 3) & ~((size_t)3)) + 8;
+    size_t approx_items = item_stride ? (buffer_bytes / item_stride) : 0;
+    ESP_LOGI(TAG, "Initialized ring buffer: %zu bytes (~%zu msgs)",
+             buffer_bytes, approx_items);
     return ESP_OK;
 }
 
@@ -306,8 +333,16 @@ esp_err_t can_logger_deinit(void)
 
     if (s_logger.ring_buffer)
     {
-        vRingbufferDelete(s_logger.ring_buffer);
+        if (s_logger.ring_buffer_caps_allocated)
+        {
+            vRingbufferDeleteWithCaps(s_logger.ring_buffer);
+        }
+        else
+        {
+            vRingbufferDelete(s_logger.ring_buffer);
+        }
         s_logger.ring_buffer = NULL;
+        s_logger.ring_buffer_caps_allocated = false;
     }
 
     if (s_logger.write_buffer)

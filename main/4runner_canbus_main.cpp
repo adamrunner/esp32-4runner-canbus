@@ -66,6 +66,7 @@ static void log_lvgl_mem(const char *context)
 #define VEHICLE_SPEED_BROADCAST_ID 0x0B4
 #define RPM_BROADCAST_ID_1C4 0x1C4
 #define RPM_TEST_BROADCAST_ID 0x2C1
+#define CAN_LOGGER_RING_BUFFER_BYTES (2 * 1024 * 1024)  // 2 MB ring buffer (PSRAM)
 
 #define OBD_POLL_INTERVAL_MS 150
 #define CAN_TELEMETRY_INTERVAL_MS 2000
@@ -779,7 +780,7 @@ extern "C" void app_main(void)
     } else {
         ESP_LOGI(TAG, "SD card initialized");
 
-        esp_err_t log_err = can_logger_init(8192);  // ~5 sec buffer at ~1700 msg/sec sustained
+        esp_err_t log_err = can_logger_init(CAN_LOGGER_RING_BUFFER_BYTES);
         if (log_err != ESP_OK) {
             ESP_LOGW(TAG, "CAN logger init failed: %s", esp_err_to_name(log_err));
         } else {

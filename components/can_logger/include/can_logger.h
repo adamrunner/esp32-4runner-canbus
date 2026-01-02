@@ -48,10 +48,10 @@ typedef struct {
  *
  * Must be called after sd_card_init().
  *
- * @param ring_buffer_size Number of messages in the ring buffer
+ * @param ring_buffer_bytes Size of the ring buffer in bytes
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t can_logger_init(size_t ring_buffer_size);
+esp_err_t can_logger_init(size_t ring_buffer_bytes);
 
 /**
  * @brief Deinitialize the CAN logger

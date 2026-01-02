@@ -1,5 +1,5 @@
 /*
- * RPM Test Page - Diagnostic vs Broadcast RPM comparison
+ * RPM Page - Diagnostic vs Broadcast RPM comparison
  */
 
 #pragma once

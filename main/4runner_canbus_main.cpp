@@ -62,6 +62,7 @@ static void log_lvgl_mem(const char *context)
 #define METER_REQUEST_ID 0x7C0
 #define WHEEL_SPEED_BROADCAST_ID 0x0AA
 #define VEHICLE_SPEED_BROADCAST_ID 0x0B4
+#define RPM_BROADCAST_ID_1C4 0x1C4
 #define RPM_TEST_BROADCAST_ID 0x2C1
 
 #define OBD_POLL_INTERVAL_MS 150
@@ -122,6 +123,7 @@ typedef struct {
 static const obd_request_t k_request_sequence[] = {
     {OBD_REQUEST_ID, 0x01, 0x0C, 0},
     {OBD_REQUEST_ID, 0x01, 0x0D, 0},  // Vehicle speed
+    {OBD_REQUEST_ID, 0x01, 0x11, 0},  // Throttle position
     {OBD_REQUEST_ID, 0x01, 0x42, 0},
     {OBD_REQUEST_ID, 0x01, 0x0F, 0},
     {OBD_REQUEST_ID, 0x01, 0x33, 0},
@@ -210,6 +212,14 @@ static void handle_standard_response(const twai_message_t *msg)
             }
             break;
         }
+        case 0x11: {
+            // Throttle position (OBD-II standard: 0-100%)
+            if (length >= 3) {
+                m->throttle_pct = (msg->data[3] * 100.0f) / 255.0f;
+                m->throttle_valid = true;
+            }
+            break;
+        }
         case 0x42: {
             if (length >= 4) {
                 uint16_t raw = (uint16_t)(msg->data[3] << 8) | msg->data[4];
@@ -276,6 +286,24 @@ static void handle_broadcast_vehicle_speed(const twai_message_t *msg)
     uint16_t raw_speed = ((uint16_t)msg->data[5] << 8) | msg->data[6];
     m->bcast_vehicle_speed_kph = raw_speed / 100.0f;
     m->bcast_vehicle_speed_valid = true;
+
+    metrics_unlock();
+}
+
+static void handle_broadcast_rpm_1c4(const twai_message_t *msg)
+{
+    if (msg->data_length_code < 2) {
+        return;
+    }
+
+    metrics_lock();
+    can_metrics_t *m = metrics_get_for_update();
+
+    uint16_t raw_rpm = ((uint16_t)msg->data[0] << 8) | msg->data[1];
+    // Derived from correlation with PID 0x0C: rpm ~= raw * 25 / 32.
+    static const float k_rpm_scale = 25.0f / 32.0f;
+    m->bcast_rpm_1c4 = raw_rpm * k_rpm_scale;
+    m->bcast_rpm_1c4_valid = true;
 
     metrics_unlock();
 }
@@ -405,6 +433,11 @@ static void process_obd_response(const twai_message_t *msg)
 
     if (msg->identifier == VEHICLE_SPEED_BROADCAST_ID) {
         handle_broadcast_vehicle_speed(msg);
+        return;
+    }
+
+    if (msg->identifier == RPM_BROADCAST_ID_1C4) {
+        handle_broadcast_rpm_1c4(msg);
         return;
     }
 

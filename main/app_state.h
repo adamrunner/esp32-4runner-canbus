@@ -25,6 +25,7 @@ typedef struct {
     float vbatt_v;
     float iat_c;
     float baro_kpa;
+    float throttle_pct;
     float atf_pan_c;
     float atf_tqc_c;
     float fli_vol_gal;
@@ -44,6 +45,9 @@ typedef struct {
     // Vehicle speed
     float diag_vehicle_speed_kph;   // from OBD-II PID 0x0D
     float bcast_vehicle_speed_kph;  // from broadcast 0x0B4
+    // Broadcast RPM (from 0x1C4)
+    float bcast_rpm_1c4;
+    bool bcast_rpm_1c4_valid;
     // Broadcast RPM test decodings (from 0x2C1)
     float bcast_rpm_1;
     float bcast_rpm_2;
@@ -65,6 +69,7 @@ typedef struct {
     bool vbatt_valid;
     bool iat_valid;
     bool baro_valid;
+    bool throttle_valid;
     bool atf_valid;
     bool fuel_valid;
     bool odo_valid;

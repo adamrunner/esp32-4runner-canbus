@@ -22,9 +22,9 @@ static bool s_autostart_ui_updating = false;
 typedef struct {
     int page_index;
     lv_obj_t *rpm_value;
+    lv_obj_t *throttle_value;
     lv_obj_t *vbatt_value;
     lv_obj_t *iat_value;
-    lv_obj_t *baro_value;
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
     lv_obj_t *can_toggle_label;
@@ -100,13 +100,13 @@ static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_t *card = create_metric_card(grid, "RPM", &data->rpm_value);
     lv_obj_set_size(card, LV_PCT(48), 110);
 
+    card = create_metric_card(grid, "Throttle (%)", &data->throttle_value);
+    lv_obj_set_size(card, LV_PCT(48), 110);
+
     card = create_metric_card(grid, "Battery (V)", &data->vbatt_value);
     lv_obj_set_size(card, LV_PCT(48), 110);
 
     card = create_metric_card(grid, "IAT (C)", &data->iat_value);
-    lv_obj_set_size(card, LV_PCT(48), 110);
-
-    card = create_metric_card(grid, "Baro (kPa)", &data->baro_value);
     lv_obj_set_size(card, LV_PCT(48), 110);
 
     lv_obj_t *autostart_row = lv_obj_create(page->container);
@@ -190,6 +190,13 @@ static void diag_page_on_update(dm_page_t *page)
     }
     lv_label_set_text(data->rpm_value, buf);
 
+    if (snap.throttle_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.throttle_pct);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->throttle_value, buf);
+
     if (snap.vbatt_valid) {
         snprintf(buf, sizeof(buf), "%.2f", snap.vbatt_v);
     } else {
@@ -203,13 +210,6 @@ static void diag_page_on_update(dm_page_t *page)
         snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(data->iat_value, buf);
-
-    if (snap.baro_valid) {
-        snprintf(buf, sizeof(buf), "%.0f", snap.baro_kpa);
-    } else {
-        snprintf(buf, sizeof(buf), "--");
-    }
-    lv_label_set_text(data->baro_value, buf);
 
     update_page_counter(data->page_counter, data->page_index);
 }

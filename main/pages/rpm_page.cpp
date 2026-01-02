@@ -1,5 +1,5 @@
 /*
- * RPM Test Page Implementation
+ * RPM Page Implementation
  */
 
 #include "rpm_page.h"
@@ -19,10 +19,7 @@ static const char *TAG = "rpm_page";
 typedef struct {
     int page_index;
     lv_obj_t *diag_rpm_value;
-    lv_obj_t *bcast_rpm_1_value;
-    lv_obj_t *bcast_rpm_2_value;
-    lv_obj_t *bcast_rpm_3_value;
-    lv_obj_t *bcast_rpm_4_value;
+    lv_obj_t *bcast_rpm_value;
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
     lv_obj_t *can_toggle_label;
@@ -64,7 +61,7 @@ static void rpm_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_add_flag(header, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
     lv_obj_t *title_label = lv_label_create(header);
-    lv_label_set_text(title_label, "RPM Test");
+    lv_label_set_text(title_label, "RPM");
     lv_obj_set_style_text_font(title_label, k_title_font, 0);
     lv_obj_set_style_text_color(title_label, k_text_color, 0);
     lv_obj_add_flag(title_label, LV_OBJ_FLAG_GESTURE_BUBBLE);
@@ -78,19 +75,10 @@ static void rpm_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_t *grid = create_metrics_grid(page->container);
 
     lv_obj_t *card = create_metric_card(grid, "Diag RPM", &data->diag_rpm_value);
-    lv_obj_set_size(card, LV_PCT(98), 90);
+    lv_obj_set_size(card, LV_PCT(48), 110);
 
-    card = create_metric_card(grid, "Test 1 (b2×8)", &data->bcast_rpm_1_value);
-    lv_obj_set_size(card, LV_PCT(48), 90);
-
-    card = create_metric_card(grid, "Test 2 (b4×8)", &data->bcast_rpm_2_value);
-    lv_obj_set_size(card, LV_PCT(48), 90);
-
-    card = create_metric_card(grid, "Test 3 (b7×8)", &data->bcast_rpm_3_value);
-    lv_obj_set_size(card, LV_PCT(48), 90);
-
-    card = create_metric_card(grid, "Test 4 (b4-5 LE/8)", &data->bcast_rpm_4_value);
-    lv_obj_set_size(card, LV_PCT(48), 90);
+    card = create_metric_card(grid, "Bcast RPM (1C4)", &data->bcast_rpm_value);
+    lv_obj_set_size(card, LV_PCT(48), 110);
 
     create_nav_bar(page->container, &data->can_toggle_label);
     g_rpm_can_toggle_label = data->can_toggle_label;
@@ -141,33 +129,12 @@ static void rpm_page_on_update(dm_page_t *page)
     }
     lv_label_set_text(data->diag_rpm_value, buf);
 
-    if (snap.bcast_rpm_valid) {
-        snprintf(buf, sizeof(buf), "%.0f", snap.bcast_rpm_1);
+    if (snap.bcast_rpm_1c4_valid) {
+        snprintf(buf, sizeof(buf), "%.0f", snap.bcast_rpm_1c4);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->bcast_rpm_1_value, buf);
-
-    if (snap.bcast_rpm_valid) {
-        snprintf(buf, sizeof(buf), "%.0f", snap.bcast_rpm_2);
-    } else {
-        snprintf(buf, sizeof(buf), "--");
-    }
-    lv_label_set_text(data->bcast_rpm_2_value, buf);
-
-    if (snap.bcast_rpm_valid) {
-        snprintf(buf, sizeof(buf), "%.0f", snap.bcast_rpm_3);
-    } else {
-        snprintf(buf, sizeof(buf), "--");
-    }
-    lv_label_set_text(data->bcast_rpm_3_value, buf);
-
-    if (snap.bcast_rpm_valid) {
-        snprintf(buf, sizeof(buf), "%.0f", snap.bcast_rpm_4);
-    } else {
-        snprintf(buf, sizeof(buf), "--");
-    }
-    lv_label_set_text(data->bcast_rpm_4_value, buf);
+    lv_label_set_text(data->bcast_rpm_value, buf);
 
     update_page_counter(data->page_counter, data->page_index);
 }
@@ -175,7 +142,7 @@ static void rpm_page_on_update(dm_page_t *page)
 dm_page_t *rpm_page_create(void)
 {
     return page_create(
-        "RPM Test",
+        "RPM",
         rpm_page_on_create,
         rpm_page_on_destroy,
         rpm_page_on_show,

@@ -22,6 +22,8 @@ typedef struct {
     lv_obj_t *longitudinal_g_value;
     lv_obj_t *yaw_rate_value;
     lv_obj_t *steering_angle_value;
+    lv_obj_t *cand_1d0_value;
+    lv_obj_t *cand_2c1_value;
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
     lv_obj_t *can_toggle_label;
@@ -66,6 +68,35 @@ static void orientation_page_on_create(dm_page_t *page, lv_obj_t *parent)
 
     card = create_metric_card(grid, "Steer Ang", &data->steering_angle_value);
     lv_obj_set_size(card, LV_PCT(48), 120);
+
+    lv_obj_t *cand_row = lv_obj_create(page->container);
+    lv_obj_set_width(cand_row, LV_PCT(100));
+    lv_obj_set_height(cand_row, 48);
+    lv_obj_set_style_bg_opa(cand_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(cand_row, 0, 0);
+    lv_obj_set_style_pad_all(cand_row, 0, 0);
+    lv_obj_set_style_pad_row(cand_row, 4, 0);
+    lv_obj_set_flex_flow(cand_row, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cand_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(cand_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(cand_row, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    data->cand_1d0_value = lv_label_create(cand_row);
+    lv_label_set_text(data->cand_1d0_value, "1D0: --");
+    lv_obj_set_style_text_font(data->cand_1d0_value, k_label_font, 0);
+    lv_obj_set_style_text_color(data->cand_1d0_value, k_muted_text_color, 0);
+    lv_obj_set_width(data->cand_1d0_value, LV_PCT(100));
+    lv_label_set_long_mode(data->cand_1d0_value, LV_LABEL_LONG_CLIP);
+    lv_obj_add_flag(data->cand_1d0_value, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    data->cand_2c1_value = lv_label_create(cand_row);
+    lv_label_set_text(data->cand_2c1_value, "2C1: --");
+    lv_obj_set_style_text_font(data->cand_2c1_value, k_label_font, 0);
+    lv_obj_set_style_text_color(data->cand_2c1_value, k_muted_text_color, 0);
+    lv_obj_set_width(data->cand_2c1_value, LV_PCT(100));
+    lv_label_set_long_mode(data->cand_2c1_value, LV_LABEL_LONG_CLIP);
+    lv_obj_add_flag(data->cand_2c1_value, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
     create_nav_bar(page->container, &data->can_toggle_label);
     g_orientation_can_toggle_label = data->can_toggle_label;
@@ -137,6 +168,26 @@ static void orientation_page_on_update(dm_page_t *page)
         snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(data->steering_angle_value, buf);
+
+    if (snap.cand_1d0_valid) {
+        snprintf(buf, sizeof(buf), "1D0: %02X %02X %02X %02X %02X %02X %02X %02X",
+                 snap.cand_1d0_raw[0], snap.cand_1d0_raw[1], snap.cand_1d0_raw[2],
+                 snap.cand_1d0_raw[3], snap.cand_1d0_raw[4], snap.cand_1d0_raw[5],
+                 snap.cand_1d0_raw[6], snap.cand_1d0_raw[7]);
+    } else {
+        snprintf(buf, sizeof(buf), "1D0: --");
+    }
+    lv_label_set_text(data->cand_1d0_value, buf);
+
+    if (snap.cand_2c1_valid) {
+        snprintf(buf, sizeof(buf), "2C1: %02X %02X %02X %02X %02X %02X %02X %02X",
+                 snap.cand_2c1_raw[0], snap.cand_2c1_raw[1], snap.cand_2c1_raw[2],
+                 snap.cand_2c1_raw[3], snap.cand_2c1_raw[4], snap.cand_2c1_raw[5],
+                 snap.cand_2c1_raw[6], snap.cand_2c1_raw[7]);
+    } else {
+        snprintf(buf, sizeof(buf), "2C1: --");
+    }
+    lv_label_set_text(data->cand_2c1_value, buf);
 
     update_page_counter(data->page_counter, data->page_index);
 }

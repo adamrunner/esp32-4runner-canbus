@@ -18,6 +18,7 @@ typedef struct {
     lv_obj_t *atf_tqc_value;
     lv_obj_t *tqc_lockup_value;
     lv_obj_t *gear_value;
+    lv_obj_t *gear_raw_value;
     lv_obj_t *fuel_value;
     lv_obj_t *odo_value;
     lv_obj_t *page_counter;
@@ -63,6 +64,13 @@ static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
 
     card = create_metric_card(grid, "Gear", &data->gear_value);
     lv_obj_set_size(card, LV_PCT(31), 110);
+    data->gear_raw_value = lv_label_create(card);
+    lv_label_set_text(data->gear_raw_value, "025: -- -- --");
+    lv_obj_set_style_text_font(data->gear_raw_value, k_label_font, 0);
+    lv_obj_set_style_text_color(data->gear_raw_value, k_muted_text_color, 0);
+    lv_obj_set_width(data->gear_raw_value, LV_PCT(100));
+    lv_label_set_long_mode(data->gear_raw_value, LV_LABEL_LONG_CLIP);
+    lv_obj_add_flag(data->gear_raw_value, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
     card = create_metric_card(grid, "Fuel (gal)", &data->fuel_value);
     lv_obj_set_size(card, LV_PCT(31), 110);
@@ -139,6 +147,14 @@ static void fourrunner_page_on_update(dm_page_t *page)
         snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(data->gear_value, buf);
+
+    if (snap.cand_025_valid) {
+        snprintf(buf, sizeof(buf), "025: %02X %02X %02X",
+                 snap.cand_025_raw[4], snap.cand_025_raw[5], snap.cand_025_raw[6]);
+    } else {
+        snprintf(buf, sizeof(buf), "025: -- -- --");
+    }
+    lv_label_set_text(data->gear_raw_value, buf);
 
     if (snap.fuel_valid) {
         snprintf(buf, sizeof(buf), "%.1f", snap.fli_vol_gal);

@@ -64,8 +64,10 @@ static void log_lvgl_mem(const char *context)
 #define METER_REQUEST_ID 0x7C0
 #define WHEEL_SPEED_BROADCAST_ID 0x0AA
 #define VEHICLE_SPEED_BROADCAST_ID 0x0B4
+#define GEAR_BROADCAST_ID_025 0x025
 #define RPM_BROADCAST_ID_1C4 0x1C4
 #define RPM_TEST_BROADCAST_ID 0x2C1
+#define ORIENTATION_CAND_ID_1D0 0x1D0
 #define CAN_LOGGER_RING_BUFFER_BYTES (2 * 1024 * 1024)  // 2 MB ring buffer (PSRAM)
 
 #define OBD_POLL_INTERVAL_MS 150
@@ -311,6 +313,8 @@ static void handle_broadcast_vehicle_speed(const twai_message_t *msg)
     uint16_t raw_speed = ((uint16_t)msg->data[5] << 8) | msg->data[6];
     m->bcast_vehicle_speed_kph = raw_speed / 100.0f;
     m->bcast_vehicle_speed_valid = true;
+    memcpy(m->cand_0b4_raw, msg->data, sizeof(m->cand_0b4_raw));
+    m->cand_0b4_valid = true;
 
     metrics_unlock();
 }
@@ -350,7 +354,35 @@ static void handle_broadcast_rpm_test(const twai_message_t *msg)
     m->bcast_rpm_4 = raw_16 * 0.125f;
 
     m->bcast_rpm_valid = true;
+    memcpy(m->cand_2c1_raw, msg->data, sizeof(m->cand_2c1_raw));
+    m->cand_2c1_valid = true;
 
+    metrics_unlock();
+}
+
+static void handle_broadcast_candidate_1d0(const twai_message_t *msg)
+{
+    if (msg->data_length_code < 8) {
+        return;
+    }
+
+    metrics_lock();
+    can_metrics_t *m = metrics_get_for_update();
+    memcpy(m->cand_1d0_raw, msg->data, sizeof(m->cand_1d0_raw));
+    m->cand_1d0_valid = true;
+    metrics_unlock();
+}
+
+static void handle_broadcast_candidate_025(const twai_message_t *msg)
+{
+    if (msg->data_length_code < 8) {
+        return;
+    }
+
+    metrics_lock();
+    can_metrics_t *m = metrics_get_for_update();
+    memcpy(m->cand_025_raw, msg->data, sizeof(m->cand_025_raw));
+    m->cand_025_valid = true;
     metrics_unlock();
 }
 
@@ -468,6 +500,16 @@ static void process_obd_response(const twai_message_t *msg)
 
     if (msg->identifier == RPM_TEST_BROADCAST_ID) {
         handle_broadcast_rpm_test(msg);
+        return;
+    }
+
+    if (msg->identifier == ORIENTATION_CAND_ID_1D0) {
+        handle_broadcast_candidate_1d0(msg);
+        return;
+    }
+
+    if (msg->identifier == GEAR_BROADCAST_ID_025) {
+        handle_broadcast_candidate_025(msg);
         return;
     }
 

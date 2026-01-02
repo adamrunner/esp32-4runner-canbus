@@ -13,6 +13,7 @@
 #include <freertos/ringbuf.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 
@@ -28,8 +29,8 @@ typedef struct {
     can_logger_message_t msg;
 } ring_buffer_item_t;
 
-// Write buffer size (characters) - sized for ~80 messages at ~100 bytes each
-#define WRITE_BUFFER_SIZE 8192
+// Write buffer size (characters) - sized for ~320 messages at ~100 bytes each
+#define WRITE_BUFFER_SIZE 32768
 #define WRITER_TASK_STACK_SIZE 4096
 #define WRITER_TASK_PRIORITY 5  // Higher priority for keeping up with CAN traffic
 #define FLUSH_INTERVAL_MS 1000
@@ -44,7 +45,8 @@ static struct {
     void *log_file;
     char current_file[64];
     can_logger_stats_t stats;
-    char write_buffer[WRITE_BUFFER_SIZE];
+    char *write_buffer;
+    size_t write_buffer_size;
     size_t write_buffer_pos;
     int64_t last_flush_time;
 } s_logger = {
@@ -54,6 +56,8 @@ static struct {
     .writer_task = NULL,
     .stats_mutex = NULL,
     .log_file = NULL,
+    .write_buffer = NULL,
+    .write_buffer_size = 0,
     .write_buffer_pos = 0,
     .last_flush_time = 0
 };
@@ -70,7 +74,7 @@ static void update_stat_atomic(uint32_t *stat, int32_t delta)
 
 static esp_err_t flush_write_buffer(void)
 {
-    if (s_logger.write_buffer_pos == 0 || !s_logger.log_file)
+    if (s_logger.write_buffer_pos == 0 || !s_logger.log_file || !s_logger.write_buffer)
     {
         return ESP_OK;
     }
@@ -99,7 +103,12 @@ static esp_err_t flush_write_buffer(void)
 static esp_err_t buffer_write(const char *data, size_t len)
 {
     // If data won't fit, flush first
-    if (s_logger.write_buffer_pos + len > WRITE_BUFFER_SIZE)
+    if (!s_logger.write_buffer || s_logger.write_buffer_size == 0)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_logger.write_buffer_pos + len > s_logger.write_buffer_size)
     {
         esp_err_t err = flush_write_buffer();
         if (err != ESP_OK)
@@ -109,7 +118,7 @@ static esp_err_t buffer_write(const char *data, size_t len)
     }
 
     // If data is larger than buffer, write directly
-    if (len > WRITE_BUFFER_SIZE)
+    if (len > s_logger.write_buffer_size)
     {
         int written = sd_card_write(s_logger.log_file, data, len);
         if (written < 0 || (size_t)written != len)
@@ -183,7 +192,7 @@ static void writer_task(void *arg)
             messages_processed++;
 
             // Flush write buffer when nearly full (160 = max CSV line size)
-            if (s_logger.write_buffer_pos > WRITE_BUFFER_SIZE - 160)
+            if (s_logger.write_buffer_pos > s_logger.write_buffer_size - 160)
             {
                 flush_write_buffer();
             }
@@ -259,6 +268,21 @@ esp_err_t can_logger_init(size_t ring_buffer_size)
         return ESP_ERR_NO_MEM;
     }
 
+    s_logger.write_buffer_size = WRITE_BUFFER_SIZE;
+    s_logger.write_buffer = heap_caps_malloc(s_logger.write_buffer_size,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_logger.write_buffer) {
+        s_logger.write_buffer = heap_caps_malloc(s_logger.write_buffer_size, MALLOC_CAP_8BIT);
+    }
+    if (!s_logger.write_buffer) {
+        ESP_LOGE(TAG, "Failed to allocate write buffer");
+        vRingbufferDelete(s_logger.ring_buffer);
+        s_logger.ring_buffer = NULL;
+        vSemaphoreDelete(s_logger.stats_mutex);
+        s_logger.stats_mutex = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
     memset(&s_logger.stats, 0, sizeof(s_logger.stats));
     s_logger.initialized = true;
     s_logger.state = CAN_LOGGER_STOPPED;
@@ -284,6 +308,13 @@ esp_err_t can_logger_deinit(void)
     {
         vRingbufferDelete(s_logger.ring_buffer);
         s_logger.ring_buffer = NULL;
+    }
+
+    if (s_logger.write_buffer)
+    {
+        heap_caps_free(s_logger.write_buffer);
+        s_logger.write_buffer = NULL;
+        s_logger.write_buffer_size = 0;
     }
 
     if (s_logger.stats_mutex)
@@ -420,6 +451,11 @@ esp_err_t can_logger_get_stats(can_logger_stats_t *stats)
     if (!stats)
     {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_logger.initialized || !s_logger.stats_mutex)
+    {
+        return ESP_ERR_INVALID_STATE;
     }
 
     xSemaphoreTake(s_logger.stats_mutex, portMAX_DELAY);

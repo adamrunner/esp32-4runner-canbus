@@ -66,6 +66,7 @@ static void log_lvgl_mem(const char *context)
 #define RPM_TEST_BROADCAST_ID 0x2C1
 
 #define OBD_POLL_INTERVAL_MS 150
+#define CAN_TELEMETRY_INTERVAL_MS 2000
 
 // LCD Configuration
 static const int lcd_h_res = 800;
@@ -146,8 +147,8 @@ static const twai_general_config_t g_config = {
     .rx_io = RX_GPIO_NUM,
     .clkout_io = TWAI_IO_UNUSED,
     .bus_off_io = TWAI_IO_UNUSED,
-    .tx_queue_len = 5,
-    .rx_queue_len = 20,
+    .tx_queue_len = 20,
+    .rx_queue_len = 100,
     .alerts_enabled = TWAI_ALERT_NONE,
     .clkout_divider = 0,
     .intr_flags = 0,
@@ -184,6 +185,27 @@ static bool is_obd_response_id(uint32_t identifier)
            (identifier == 0x7B8) ||
            (identifier == 0x7C8) ||
            (identifier == WHEEL_SPEED_BROADCAST_ID);
+}
+
+static const char *twai_state_to_str(twai_state_t state)
+{
+    switch (state) {
+        case TWAI_STATE_STOPPED:
+            return "stopped";
+        case TWAI_STATE_RUNNING:
+            return "running";
+        case TWAI_STATE_BUS_OFF:
+            return "bus_off";
+        case TWAI_STATE_RECOVERING:
+            return "recovering";
+        default:
+            return "unknown";
+    }
+}
+
+static uint32_t delta_u32(uint32_t current, uint32_t last)
+{
+    return current >= last ? (current - last) : 0;
 }
 
 // CAN Response Handlers
@@ -541,6 +563,119 @@ static void can_tx_task(void *arg)
     }
 }
 
+static void can_telemetry_task(void *arg)
+{
+    (void)arg;
+
+    int64_t last_ms = esp_timer_get_time() / 1000;
+    uint32_t last_rx_missed = 0;
+    uint32_t last_rx_overrun = 0;
+    uint32_t last_tx_failed = 0;
+    uint32_t last_arb_lost = 0;
+    uint32_t last_bus_error = 0;
+    uint32_t last_logged = 0;
+    uint32_t last_dropped = 0;
+    uint32_t last_buf_overrun = 0;
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(CAN_TELEMETRY_INTERVAL_MS));
+
+        int64_t now_ms = esp_timer_get_time() / 1000;
+        float interval_s = (now_ms - last_ms) / 1000.0f;
+        if (interval_s <= 0.0f) {
+            interval_s = 1.0f;
+        }
+        last_ms = now_ms;
+
+        if (can_state_is_paused()) {
+            continue;
+        }
+
+        twai_status_info_t status = {};
+        esp_err_t err = twai_get_status_info(&status);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Telemetry: failed to read TWAI status: %s", esp_err_to_name(err));
+            continue;
+        }
+
+        uint32_t rx_missed_delta = delta_u32(status.rx_missed_count, last_rx_missed);
+        uint32_t rx_overrun_delta = delta_u32(status.rx_overrun_count, last_rx_overrun);
+        uint32_t tx_failed_delta = delta_u32(status.tx_failed_count, last_tx_failed);
+        uint32_t arb_lost_delta = delta_u32(status.arb_lost_count, last_arb_lost);
+        uint32_t bus_error_delta = delta_u32(status.bus_error_count, last_bus_error);
+
+        last_rx_missed = status.rx_missed_count;
+        last_rx_overrun = status.rx_overrun_count;
+        last_tx_failed = status.tx_failed_count;
+        last_arb_lost = status.arb_lost_count;
+        last_bus_error = status.bus_error_count;
+
+        if (can_logger_is_running()) {
+            can_logger_stats_t log_stats = {};
+            if (can_logger_get_stats(&log_stats) == ESP_OK) {
+                uint32_t logged_delta = delta_u32(log_stats.messages_logged, last_logged);
+                uint32_t dropped_delta = delta_u32(log_stats.messages_dropped, last_dropped);
+                uint32_t buf_overrun_delta = delta_u32(log_stats.buffer_overruns, last_buf_overrun);
+                uint32_t total_delta = logged_delta + dropped_delta;
+                float drop_pct = total_delta > 0 ? (dropped_delta * 100.0f) / total_delta : 0.0f;
+                float log_rate = logged_delta / interval_s;
+
+                ESP_LOGI(TAG,
+                         "CAN telem %.1fs state=%s rx_q=%u tx_q=%u "
+                         "rx_miss=%u(+%u) rx_ovr=%u(+%u) tx_fail=%u(+%u) "
+                         "arb_lost=%u(+%u) bus_err=%u(+%u) "
+                         "log=%u(+%u,%.1f/s) drop=%u(+%u,%.1f%%) buf_ovr=%u(+%u) wr_err=%u",
+                         interval_s,
+                         twai_state_to_str(status.state),
+                         status.msgs_to_rx,
+                         status.msgs_to_tx,
+                         status.rx_missed_count,
+                         rx_missed_delta,
+                         status.rx_overrun_count,
+                         rx_overrun_delta,
+                         status.tx_failed_count,
+                         tx_failed_delta,
+                         status.arb_lost_count,
+                         arb_lost_delta,
+                         status.bus_error_count,
+                         bus_error_delta,
+                         log_stats.messages_logged,
+                         logged_delta,
+                         log_rate,
+                         log_stats.messages_dropped,
+                         dropped_delta,
+                         drop_pct,
+                         log_stats.buffer_overruns,
+                         buf_overrun_delta,
+                         log_stats.write_errors);
+
+                last_logged = log_stats.messages_logged;
+                last_dropped = log_stats.messages_dropped;
+                last_buf_overrun = log_stats.buffer_overruns;
+            }
+        } else {
+            ESP_LOGI(TAG,
+                     "CAN telem %.1fs state=%s rx_q=%u tx_q=%u "
+                     "rx_miss=%u(+%u) rx_ovr=%u(+%u) tx_fail=%u(+%u) "
+                     "arb_lost=%u(+%u) bus_err=%u(+%u)",
+                     interval_s,
+                     twai_state_to_str(status.state),
+                     status.msgs_to_rx,
+                     status.msgs_to_tx,
+                     status.rx_missed_count,
+                     rx_missed_delta,
+                     status.rx_overrun_count,
+                     rx_overrun_delta,
+                     status.tx_failed_count,
+                     tx_failed_delta,
+                     status.arb_lost_count,
+                     arb_lost_delta,
+                     status.bus_error_count,
+                     bus_error_delta);
+        }
+    }
+}
+
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "4Runner CAN Bus Display starting");
@@ -642,7 +777,7 @@ extern "C" void app_main(void)
     } else {
         ESP_LOGI(TAG, "SD card initialized");
 
-        esp_err_t log_err = can_logger_init(2048);  // ~2.4 sec buffer at 857 msg/sec
+        esp_err_t log_err = can_logger_init(8192);  // ~5 sec buffer at ~1700 msg/sec sustained
         if (log_err != ESP_OK) {
             ESP_LOGW(TAG, "CAN logger init failed: %s", esp_err_to_name(log_err));
         } else {
@@ -750,5 +885,6 @@ extern "C" void app_main(void)
     // Start CAN tasks
     xTaskCreatePinnedToCore(can_rx_task, "CAN_RX", 4096, NULL, 5, NULL, tskNO_AFFINITY);
     xTaskCreatePinnedToCore(can_tx_task, "CAN_TX", 4096, NULL, 4, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(can_telemetry_task, "CAN_TLM", 4096, NULL, 2, NULL, tskNO_AFFINITY);
     ESP_LOGI(TAG, "CAN tasks started");
 }

@@ -127,7 +127,7 @@ esp_err_t sd_card_init(int i2c_port)
         .sclk_io_num = PIN_NUM_CLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = 4000,
+        .max_transfer_sz = 16384,
     };
 
     err = spi_bus_initialize(s_sd_state.host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
@@ -148,7 +148,7 @@ esp_err_t sd_card_init(int i2c_port)
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
         .max_files = 5,
-        .allocation_unit_size = 16 * 1024
+        .allocation_unit_size = 64 * 1024
     };
 
     ESP_LOGI(TAG, "Mounting filesystem...");

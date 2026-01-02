@@ -108,6 +108,34 @@ Messages with >100 unique data combinations (highly dynamic sensor data):
 
 ---
 
+## 2026-01-02 Drive Home Logs (CAN_20260102_123449, CAN_20260102_125202)
+
+Two drive-home segments (highway-heavy) were analyzed:
+
+- **CAN_20260102_123449.CSV**: 920,834 messages over 899.3 seconds, ~1024 msgs/sec, 91 IDs
+- **CAN_20260102_125202.CSV**: 528,579 messages over 586.9 seconds, ~900.6 msgs/sec, 96 IDs
+
+High-frequency baseline remains stable:
+- 0x020 / 0x024 / 0x025 / 0x0AA at ~65-76 Hz
+
+High-variation IDs in both logs:
+- 0x0AA, 0x0B4, 0x2C1, 0x1D0, 0x1C4, 0x024
+
+### Correlation Highlights
+
+- **0x0B4 byte 5 correlates almost perfectly with wheel speed (0x0AA)**:
+  - Speed (kph) ~= 2.53 * b5 + 0.6 (r ~= 1.00 in both logs)
+  - Strongly suggests 0x0B4 is a vehicle speed proxy, not throttle %
+- **0x2C1 shows moderate correlation with acceleration** (b6 / b6b7)
+  - Better throttle/torque candidate than 0x0B4 for these logs
+- **0x1D0 b4 and 0x1C4 b2 correlate with speed, but scale shifts between logs**
+  - Likely status/state or secondary speed-related fields, not direct speed
+- **Steering/yaw signals remain inconclusive**
+  - These logs are mostly highway; need turning-rich segments
+  - Use the new turning test analyzer (see Tools Created) on low-speed turns
+
+---
+
 ## Key Findings and Recommendations
 
 ### 1. Wheel Speed Broadcast (0x0AA) - **DECODED ✓**
@@ -126,7 +154,8 @@ Based on frequency and data variation, these CAN IDs are top candidates for vehi
 
 **0x0B4**: 23-33 Hz, 88.6% variation rate
 - Very dynamic data, similar update rate to wheel speeds
-- Likely a sensor reading (possibly throttle, brake pressure, or other control signal)
+- **Update**: byte 5 correlates almost perfectly with wheel speed (kph)
+- Treat as speed proxy; throttle is likely elsewhere (see 0x2C1)
 
 **0x2C1**: 18-25 Hz, 86.8-92.8% variation rate
 - Extremely dynamic data
@@ -220,10 +249,10 @@ Based on frequency and data variation, these CAN IDs are top candidates for vehi
 For each candidate CAN ID, test specific hypotheses:
 
 #### CAN ID 0x0B4 (High variation, 23-33 Hz)
-- **Hypothesis 1**: Throttle position (0-100% or 0-255)
+- **Hypothesis 1**: Vehicle speed proxy (byte 5)
 - **Hypothesis 2**: Brake pressure (multi-byte)
 - **Hypothesis 3**: Steering angle (signed 16-bit)
-- **Test**: Correlate with acceleration/braking events in log
+- **Test**: Compare 0x0B4 b5 vs wheel speed; verify linear mapping on new logs
 
 #### CAN ID 0x2C1 (High variation, 18-25 Hz)
 - **Hypothesis 1**: Engine RPM (multi-byte, 16 or 32-bit)
@@ -351,6 +380,9 @@ Bytes 0-2 show variation: `08 60 10` in log1 vs `00 00 00` in log2
    - High-frequency message summary
    - High-variation message detection
    - Sample data display
+4. **turning_test_analyzer.py**: Turning/steering candidate scan
+   - Uses 0x0AA left-right wheel speed difference to flag turns
+   - Correlates candidate bytes with turning magnitude and direction
 
 ---
 
@@ -361,7 +393,7 @@ The analysis successfully validated the wheel speed broadcast (0x0AA) decoding a
 **Top Candidates**:
 1. **0x024**: Likely engine RPM (46-65 Hz frequency matches typical engine sensors)
 2. **0x2C1**: Highly dynamic (92.8% variation), likely transmission or engine data
-3. **0x0B4**: High variation, likely throttle or brake sensor
+3. **0x0B4**: High variation, likely vehicle speed proxy (b5 ~ speed)
 4. **0x1D0**: Moderate variation, likely gear or status information
 5. **0x1C4**: Varies between logs, likely mode or vehicle status
 

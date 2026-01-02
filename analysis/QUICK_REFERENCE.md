@@ -38,12 +38,12 @@ Raw: 0x8012 = 32,786
 0x82 (130) = 3rd gear?
 ```
 
-### 3. Throttle/Sensor - CAN ID 0x0B4 (23-33 Hz, 88.6% variation)
+### 3. Speed Proxy / Sensor - CAN ID 0x0B4 (23-33 Hz, 88.6% variation)
 
 **To Test:**
-- Check if any single byte correlates 0-100% or 0-255
-- Look for multi-byte encoding (16-bit, 32-bit)
-- Test during acceleration vs constant speed
+- **Update**: byte 5 correlates almost perfectly with wheel speed (kph)
+- Treat 0x0B4 as a vehicle speed proxy; throttle likely elsewhere (0x2C1?)
+- Verify mapping on new logs (speed ~= 2.5 * b5 + 0.6)
 
 ### 4. Transmission/Status - CAN ID 0x2C1 (18-25 Hz, 86.8% variation)
 
@@ -90,6 +90,9 @@ python3 analysis/can_analyzer.py logs/NEW_LOG.CSV --analyze 024
 
 # Validate wheel speeds
 python3 analysis/wheel_speed_analyzer.py logs/NEW_LOG.CSV --validate --stats
+
+# Turning test (best with low-speed turns / parking lot)
+python3 analysis/turning_test_analyzer.py logs/NEW_LOG.CSV --top 5
 ```
 
 ---

@@ -124,6 +124,37 @@ Output shows:
 
 ---
 
+### 4. turning_test_analyzer.py
+
+Turning-focused analyzer to identify steering/yaw candidates.
+
+**Features:**
+- Uses 0x0AA wheel speed differences to detect turning
+- Correlates candidate bytes with left-right wheel speed delta
+- Compares turning vs straight deltas for candidate bytes
+
+**Usage:**
+```bash
+python3 turning_test_analyzer.py <log_file.csv> [options]
+
+Options:
+  --candidates IDS   Comma-separated CAN IDs (default: 0B4,2C1,1D0,1C4,024,025)
+  --min-speed KPH    Minimum speed to consider (default: 5.0)
+  --min-diff KPH     Turning threshold (default: 1.5)
+  --straight-max-diff KPH  Straight threshold (default: 0.5)
+  --tolerance-ms MS  Timestamp alignment tolerance (default: 20)
+  --top N            Top results per metric (default: 5)
+```
+
+**Example:**
+```bash
+python3 turning_test_analyzer.py logs/CAN_20260102_125202.CSV --top 5
+```
+
+Use logs with many low-speed turns (parking lots, neighborhoods) for best results.
+
+---
+
 ## Log File Format
 
 CSV files should have the following columns:
@@ -163,7 +194,7 @@ Based on frequency and data variation:
 
 3. **0x0B4** (23-33 Hz, 88.6% variation)
    - Very dynamic
-   - Likely: Throttle position or brake sensor
+   - Likely: Vehicle speed proxy (byte 5 ~ speed)
 
 4. **0x1D0** (18-25 Hz, 44.8-59.9% variation)
    - Moderate variation

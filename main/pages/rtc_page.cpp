@@ -246,7 +246,7 @@ static void rtc_page_on_create(dm_page_t *page, lv_obj_t *parent)
         return;
     }
 
-    data->page_index = 4;
+    data->page_index = 6;
     s_rtc_page_data = data;
 
     // Initialize edit time from current RTC

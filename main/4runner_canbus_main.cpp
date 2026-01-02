@@ -31,9 +31,11 @@
 #include "fourrunner_page.h"
 #include "wheel_speed_page.h"
 #include "logging_page.h"
-#include "rtc_page.h"
 #include "rpm_page.h"
 #include "orientation_page.h"
+#include "rtc_page.h"
+
+#define ENABLE_RTC_SETTINGS_PAGE 0
 
 static const char *TAG = "4RUNNER_CAN";
 
@@ -835,17 +837,6 @@ extern "C" void app_main(void)
     }
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    ESP_LOGI(TAG, "Creating rtc page...");
-    dm_page_t *rtc_settings_page = rtc_page_create();
-    if (rtc_settings_page) {
-        ESP_LOGI(TAG, "Adding rtc page...");
-        display_manager_add_page(display, rtc_settings_page);
-        page_count++;
-        ESP_LOGI(TAG, "RTC page added, heap: %lu", (unsigned long)esp_get_free_heap_size());
-        log_lvgl_mem("LVGL after rtc page");
-    }
-    vTaskDelay(pdMS_TO_TICKS(10));
-
     ESP_LOGI(TAG, "Creating rpm page...");
     dm_page_t *rpm_test_page = rpm_page_create();
     if (rpm_test_page) {
@@ -866,6 +857,20 @@ extern "C" void app_main(void)
         ESP_LOGI(TAG, "Orientation page added, heap: %lu", (unsigned long)esp_get_free_heap_size());
         log_lvgl_mem("LVGL after orientation page");
     }
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+#if ENABLE_RTC_SETTINGS_PAGE
+    ESP_LOGI(TAG, "Creating rtc page...");
+    dm_page_t *rtc_settings_page = rtc_page_create();
+    if (rtc_settings_page) {
+        ESP_LOGI(TAG, "Adding rtc page...");
+        display_manager_add_page(display, rtc_settings_page);
+        page_count++;
+        ESP_LOGI(TAG, "RTC page added, heap: %lu", (unsigned long)esp_get_free_heap_size());
+        log_lvgl_mem("LVGL after rtc page");
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+#endif
 
     ESP_LOGI(TAG, "All pages created, count=%d", page_count);
     app_state_set_page_count(page_count);

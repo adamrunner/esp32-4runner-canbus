@@ -34,7 +34,7 @@ static void orientation_page_on_create(dm_page_t *page, lv_obj_t *parent)
         return;
     }
 
-    data->page_index = 6;
+    data->page_index = 5;
 
     page->user_data = data;
     page->container = lv_obj_create(parent);

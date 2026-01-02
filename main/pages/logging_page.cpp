@@ -42,6 +42,8 @@ typedef struct {
     uint32_t last_rx_overrun;
 } logging_page_data_t;
 
+static const lv_color_t k_log_start_color = lv_color_hex(0x40A840);
+
 static uint32_t delta_u32(uint32_t current, uint32_t last)
 {
     return current >= last ? (current - last) : 0;
@@ -181,7 +183,7 @@ static void logging_page_on_create(dm_page_t *page, lv_obj_t *parent)
     // Start/Stop logging button
     data->start_stop_btn = lv_btn_create(bar);
     lv_obj_set_size(data->start_stop_btn, 180, 44);
-    lv_obj_set_style_bg_color(data->start_stop_btn, k_accent_color, 0);
+    lv_obj_set_style_bg_color(data->start_stop_btn, k_log_start_color, 0);
     lv_obj_set_style_bg_opa(data->start_stop_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(data->start_stop_btn, 14, 0);
     lv_obj_set_style_border_width(data->start_stop_btn, 1, 0);
@@ -299,7 +301,7 @@ static void logging_page_on_update(dm_page_t *page)
         switch (stats.state) {
             case CAN_LOGGER_STOPPED:
                 state_text = "Stopped";
-                btn_color = k_accent_color;
+                btn_color = k_log_start_color;
                 btn_text = "Start Logging";
                 break;
             case CAN_LOGGER_RUNNING:

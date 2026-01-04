@@ -91,7 +91,7 @@ def build_message_map(databases):
     return msg_map
 
 
-def decode_message_rows(msg, rows):
+def decode_message_rows(msg, rows, verbose=False):
     decoded_rows = []
     errors = 0
 
@@ -108,7 +108,9 @@ def decode_message_rows(msg, rows):
         ])
         try:
             decoded = msg.decode(data, decode_choices=False)
-        except Exception:
+        except Exception as e:
+            if verbose:
+                print(f"  Decode error at ts={row.timestamp_us}: {e}")
             errors += 1
             continue
 
@@ -132,6 +134,8 @@ def main():
     parser.add_argument("--out-dir", default="analysis/decoded", help="Output directory")
     parser.add_argument("--compare-obd", action="store_true",
                         help="Compare decoded 0x024/0x025 against OBD PID 0x47 signals")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Log decode errors for debugging DBC mismatches")
     args = parser.parse_args()
 
     log_path = Path(args.log_file)
@@ -226,7 +230,7 @@ def main():
         if subset.empty:
             continue
 
-        decoded_df, errors = decode_message_rows(msg, subset)
+        decoded_df, errors = decode_message_rows(msg, subset, verbose=args.verbose)
         if decoded_df.empty:
             print(f"{hex_id}: no decodable rows")
             continue

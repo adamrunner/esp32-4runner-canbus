@@ -164,24 +164,22 @@ static esp_err_t flush_write_buffer(void)
 
 static esp_err_t buffer_write(const void *data, size_t len)
 {
-    // If data won't fit, flush first
     if (!s_logger.write_buffer || s_logger.write_buffer_size == 0)
     {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (s_logger.write_buffer_pos + len > s_logger.write_buffer_size)
-    {
-        esp_err_t err = flush_write_buffer();
-        if (err != ESP_OK)
-        {
-            return err;
-        }
-    }
-
-    // If data is larger than buffer, write directly
+    // If data is larger than buffer, flush any pending data then write directly
     if (len > s_logger.write_buffer_size)
     {
+        if (s_logger.write_buffer_pos > 0)
+        {
+            esp_err_t err = flush_write_buffer();
+            if (err != ESP_OK)
+            {
+                return err;
+            }
+        }
         int written = sd_card_write(s_logger.log_file, data, len);
         if (written < 0 || (size_t)written != len)
         {
@@ -192,6 +190,16 @@ static esp_err_t buffer_write(const void *data, size_t len)
         s_logger.stats.bytes_written += written;
         xSemaphoreGive(s_logger.stats_mutex);
         return ESP_OK;
+    }
+
+    // If data won't fit in remaining buffer space, flush first
+    if (s_logger.write_buffer_pos + len > s_logger.write_buffer_size)
+    {
+        esp_err_t err = flush_write_buffer();
+        if (err != ESP_OK)
+        {
+            return err;
+        }
     }
 
     // Copy to buffer
@@ -215,6 +223,8 @@ static esp_err_t write_bin_header(void)
     esp_err_t err = buffer_write(&header, sizeof(header));
     if (err != ESP_OK)
     {
+        ESP_LOGE(TAG, "Failed to write header: %s (buffer_pos=%zu, buffer_size=%zu)",
+                 esp_err_to_name(err), s_logger.write_buffer_pos, s_logger.write_buffer_size);
         update_stat_atomic(&s_logger.stats.write_errors, 1);
         return err;
     }
@@ -239,6 +249,8 @@ static esp_err_t write_bin_record(const ring_buffer_item_t *item)
     }
     else
     {
+        ESP_LOGE(TAG, "Failed to write record: %s (can_id=0x%03lx)",
+                 esp_err_to_name(err), (unsigned long)record.can_id);
         update_stat_atomic(&s_logger.stats.write_errors, 1);
     }
 
@@ -251,7 +263,7 @@ static void writer_task(void *arg)
 
     if (write_bin_header() != ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to write binary header");
+        ESP_LOGE(TAG, "Failed to write binary header, aborting logger");
         s_logger.state = CAN_LOGGER_ERROR;
         flush_write_buffer();
         sd_card_flush(s_logger.log_file);

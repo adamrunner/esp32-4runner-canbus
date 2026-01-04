@@ -136,6 +136,10 @@ def main():
 
     try:
         records = convert_file(input_path, output_path)
+    except ValueError as exc:
+        print(f"Invalid binary log file: {exc}", file=sys.stderr)
+        print("Ensure the input is a valid CAN binary log (.bin) file.", file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f"Conversion failed: {exc}", file=sys.stderr)
         return 1

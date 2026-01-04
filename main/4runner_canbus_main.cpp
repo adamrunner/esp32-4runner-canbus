@@ -158,6 +158,8 @@ static uint32_t extract_be_signal_lsb_start(const uint8_t *data, uint8_t start_b
     return value;
 }
 
+// Sign-extend a value from bit_length bits to 32 bits.
+// For bit_length >= 32, no extension is needed (and shifting would be UB).
 static int32_t sign_extend(uint32_t value, uint8_t bit_length)
 {
     if (bit_length == 0 || bit_length >= 32) {

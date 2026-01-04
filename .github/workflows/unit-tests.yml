@@ -1,0 +1,41 @@
+name: Unit Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'components/can_signal/**'
+      - 'test/**'
+      - '.github/workflows/unit-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'components/can_signal/**'
+      - 'test/**'
+      - '.github/workflows/unit-tests.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Build and run tests
+        run: |
+          cd test
+          mkdir -p build
+          cd build
+          cmake ..
+          make
+          ./test_can_signal
+
+      - name: Run tests with CTest
+        run: |
+          cd test/build
+          ctest --output-on-failure

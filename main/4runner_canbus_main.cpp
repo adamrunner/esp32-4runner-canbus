@@ -27,6 +27,7 @@
 #include "app_state.h"
 #include "page_utils.h"
 #include "settings_store.h"
+#include "can_signal.h"
 #include "diag_page.h"
 #include "fourrunner_page.h"
 #include "wheel_speed_page.h"
@@ -135,45 +136,8 @@ static const int lcd_i2c_freq_hz = 400000;
 static const int lcd_touch_reset_io_num = 4;
 static const int lcd_touch_int_io_num = -1;
 
-// Extract a big-endian signal where start_bit is the LSB position.
-// Bits are collected from start_bit upward (in big-endian bit numbering)
-// and assembled so the first bit becomes the LSB of the result.
-static uint32_t extract_be_signal_lsb_start(const uint8_t *data, uint8_t start_bit, uint8_t length)
-{
-    uint32_t value = 0;
-    int byte_index = start_bit / 8;
-    int bit_index = start_bit % 8;  // 0 = LSB of byte
-
-    for (uint8_t i = 0; i < length; i++) {
-        uint8_t bit = (data[byte_index] >> bit_index) & 0x01;
-        value |= (uint32_t)bit << i;  // First bit -> bit 0 (LSB)
-        if (bit_index == 0) {
-            byte_index++;
-            bit_index = 7;
-        } else {
-            bit_index--;
-        }
-    }
-
-    return value;
-}
-
-// Sign-extend a value from bit_length bits to 32 bits.
-// For bit_length >= 32, no extension is needed (and shifting would be UB).
-static int32_t sign_extend(uint32_t value, uint8_t bit_length)
-{
-    if (bit_length == 0 || bit_length >= 32) {
-        return (int32_t)value;
-    }
-
-    uint32_t sign_bit = 1u << (bit_length - 1);
-    if (value & sign_bit) {
-        uint32_t mask = (1u << bit_length) - 1u;
-        value |= ~mask;
-    }
-
-    return (int32_t)value;
-}
+// Signal extraction functions are provided by the can_signal component.
+// See components/can_signal/ for implementation and test/test_can_signal.c for tests.
 
 // OBD Request Definition
 typedef struct {
@@ -426,11 +390,11 @@ static void handle_broadcast_kinematics_024(const twai_message_t *msg)
     metrics_lock();
     can_metrics_t *m = metrics_get_for_update();
 
-    uint32_t raw_yaw = extract_be_signal_lsb_start(msg->data,
+    uint32_t raw_yaw = can_signal_extract_be_lsb(msg->data,
         KINEMATICS_YAW_START_BIT, KINEMATICS_YAW_LENGTH);
-    uint32_t raw_torque = extract_be_signal_lsb_start(msg->data,
+    uint32_t raw_torque = can_signal_extract_be_lsb(msg->data,
         KINEMATICS_TORQUE_START_BIT, KINEMATICS_TORQUE_LENGTH);
-    uint32_t raw_accel = extract_be_signal_lsb_start(msg->data,
+    uint32_t raw_accel = can_signal_extract_be_lsb(msg->data,
         KINEMATICS_ACCEL_START_BIT, KINEMATICS_ACCEL_LENGTH);
 
     // Convert from unsigned 10-bit (0-1023) to signed (-512 to +511)
@@ -468,9 +432,9 @@ static void handle_broadcast_candidate_025(const twai_message_t *msg)
 
     metrics_lock();
     can_metrics_t *m = metrics_get_for_update();
-    uint32_t raw_angle = extract_be_signal_lsb_start(msg->data,
+    uint32_t raw_angle = can_signal_extract_be_lsb(msg->data,
         STEER_ANGLE_START_BIT, STEER_ANGLE_LENGTH);
-    int32_t signed_angle = sign_extend(raw_angle, STEER_ANGLE_LENGTH);
+    int32_t signed_angle = can_signal_sign_extend(raw_angle, STEER_ANGLE_LENGTH);
     m->bcast_steering_angle_deg = signed_angle * STEER_ANGLE_SCALE;
     m->bcast_steer_angle_valid = true;
     memcpy(m->cand_025_raw, msg->data, sizeof(m->cand_025_raw));

@@ -67,6 +67,22 @@ static void log_lvgl_mem(const char *context)
 #define KINEMATICS_BROADCAST_ID_024 0x024
 #define GEAR_BROADCAST_ID_025 0x025  // DBC maps 0x025 to steering angle sensor
 #define RPM_BROADCAST_ID_1C4 0x1C4
+
+// Signal definitions for CAN ID 0x024 (Kinematics)
+// All signals are 10-bit with offset -512 (raw 0-1023 maps to -512 to +511)
+#define KINEMATICS_YAW_START_BIT      1
+#define KINEMATICS_YAW_LENGTH         10
+#define KINEMATICS_TORQUE_START_BIT   17
+#define KINEMATICS_TORQUE_LENGTH      10
+#define KINEMATICS_ACCEL_START_BIT    33
+#define KINEMATICS_ACCEL_LENGTH       10
+#define KINEMATICS_OFFSET             512  // Subtract from raw to get signed value
+
+// Signal definitions for CAN ID 0x025 (Steering Angle)
+// 12-bit signed value with scale factor 1.5 deg/LSB
+#define STEER_ANGLE_START_BIT         3
+#define STEER_ANGLE_LENGTH            12
+#define STEER_ANGLE_SCALE             1.5f
 #define RPM_TEST_BROADCAST_ID 0x2C1
 #define ORIENTATION_CAND_ID_1D0 0x1D0  // Gear candidate from correlation: byte 4
 #define CAN_LOGGER_RING_BUFFER_BYTES (4 * 1024 * 1024)  // 4 MB ring buffer (PSRAM)
@@ -119,15 +135,18 @@ static const int lcd_i2c_freq_hz = 400000;
 static const int lcd_touch_reset_io_num = 4;
 static const int lcd_touch_int_io_num = -1;
 
+// Extract a big-endian signal where start_bit is the LSB position.
+// Bits are collected from start_bit upward (in big-endian bit numbering)
+// and assembled so the first bit becomes the LSB of the result.
 static uint32_t extract_be_signal_lsb_start(const uint8_t *data, uint8_t start_bit, uint8_t length)
 {
     uint32_t value = 0;
     int byte_index = start_bit / 8;
-    int bit_index = start_bit % 8;  // 0 = LSB
+    int bit_index = start_bit % 8;  // 0 = LSB of byte
 
     for (uint8_t i = 0; i < length; i++) {
         uint8_t bit = (data[byte_index] >> bit_index) & 0x01;
-        value = (value << 1) | bit;
+        value |= (uint32_t)bit << i;  // First bit -> bit 0 (LSB)
         if (bit_index == 0) {
             byte_index++;
             bit_index = 7;
@@ -405,16 +424,21 @@ static void handle_broadcast_kinematics_024(const twai_message_t *msg)
     metrics_lock();
     can_metrics_t *m = metrics_get_for_update();
 
-    uint32_t raw_yaw = extract_be_signal_lsb_start(msg->data, 1, 10);
-    uint32_t raw_torque = extract_be_signal_lsb_start(msg->data, 17, 10);
-    uint32_t raw_accel = extract_be_signal_lsb_start(msg->data, 33, 10);
+    uint32_t raw_yaw = extract_be_signal_lsb_start(msg->data,
+        KINEMATICS_YAW_START_BIT, KINEMATICS_YAW_LENGTH);
+    uint32_t raw_torque = extract_be_signal_lsb_start(msg->data,
+        KINEMATICS_TORQUE_START_BIT, KINEMATICS_TORQUE_LENGTH);
+    uint32_t raw_accel = extract_be_signal_lsb_start(msg->data,
+        KINEMATICS_ACCEL_START_BIT, KINEMATICS_ACCEL_LENGTH);
 
-    int32_t yaw_rate = (int32_t)raw_yaw - 512;
-    int32_t steer_torque = (int32_t)raw_torque - 512;
-    int32_t accel_y = (int32_t)raw_accel - 512;
+    // Convert from unsigned 10-bit (0-1023) to signed (-512 to +511)
+    int32_t yaw_rate = (int32_t)raw_yaw - KINEMATICS_OFFSET;
+    int32_t steer_torque = (int32_t)raw_torque - KINEMATICS_OFFSET;
+    int32_t accel_y = (int32_t)raw_accel - KINEMATICS_OFFSET;
 
     m->bcast_yaw_rate_deg_sec = (float)yaw_rate;
     m->bcast_steering_torque = (float)steer_torque;
+    // Lateral G conversion: empirically derived scale and offset from OBD correlation
     m->bcast_lateral_g = (accel_y * -0.002121f) - 0.0126f;
     m->bcast_kinematics_valid = true;
 
@@ -442,9 +466,10 @@ static void handle_broadcast_candidate_025(const twai_message_t *msg)
 
     metrics_lock();
     can_metrics_t *m = metrics_get_for_update();
-    uint32_t raw_angle = extract_be_signal_lsb_start(msg->data, 3, 12);
-    int32_t signed_angle = sign_extend(raw_angle, 12);
-    m->bcast_steering_angle_deg = signed_angle * 1.5f;
+    uint32_t raw_angle = extract_be_signal_lsb_start(msg->data,
+        STEER_ANGLE_START_BIT, STEER_ANGLE_LENGTH);
+    int32_t signed_angle = sign_extend(raw_angle, STEER_ANGLE_LENGTH);
+    m->bcast_steering_angle_deg = signed_angle * STEER_ANGLE_SCALE;
     m->bcast_steer_angle_valid = true;
     memcpy(m->cand_025_raw, msg->data, sizeof(m->cand_025_raw));
     m->cand_025_valid = true;

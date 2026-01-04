@@ -1,10 +1,92 @@
 # CAN Log Analysis Scripts Usage Guide
 
-Python analysis tools live in the `scripts/` directory for analyzing and validating CAN bus captures from the 4Runner project. They accept both the original text logs and the new CSV format (`timestamp_us,can_id,dlc,byte0..byte7`).
+Python analysis tools for analyzing and validating CAN bus captures from the 4Runner project.
 
-## Scripts Overview
+## Log Formats
 
-> Binary logs: You can convert CSV logs to a compact binary format (19-byte records) with `scripts/convert_csv_to_bin.py` and feed the `.bin` file to all scripts. The tools auto-detect text/CSV vs `.bin`.
+The project supports multiple log formats:
+
+| Format | Extension | Description |
+|--------|-----------|-------------|
+| Binary | `.bin` | Device SD card logs (24-byte records with 64-byte header) |
+| CSV | `.csv` | Converted from binary, compatible with all analysis scripts |
+| Text | `.log` | Serial capture logs (legacy) |
+
+## Binary Log Tools (analysis/)
+
+Tools in the `analysis/` directory handle binary logs from the device SD card.
+
+### bin_to_csv.py - Binary to CSV Converter
+
+Converts binary CAN logs to CSV format for use with analysis scripts.
+
+**Usage:**
+```bash
+python analysis/bin_to_csv.py <input.bin> [output.csv]
+```
+
+**Examples:**
+```bash
+# Convert binary log (output name auto-generated)
+python analysis/bin_to_csv.py logs/CAN_20260104_143052.bin
+
+# Specify output path
+python analysis/bin_to_csv.py logs/CAN_20260104_143052.bin analysis/capture.csv
+```
+
+**Output CSV columns:** `datetime,timestamp_us,can_id,dlc,b0,b1,b2,b3,b4,b5,b6,b7`
+
+**Requirements:** Python 3.6+ (standard library only)
+
+---
+
+### dbc_decode.py - DBC Signal Decoder
+
+Decodes CAN messages using DBC database files and outputs decoded signal values.
+
+**Usage:**
+```bash
+python analysis/dbc_decode.py <log.csv> --dbc <file.dbc> [options]
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--dbc PATH` | DBC file to load (can specify multiple times) |
+| `--ids ID [ID ...]` | CAN IDs to decode (hex, e.g., `0x024 0x025`) |
+| `--out-dir DIR` | Output directory (default: `analysis/decoded`) |
+| `--compare-obd` | Compare decoded signals against OBD PID 0x47 responses |
+
+**Examples:**
+```bash
+# Decode all DBC-defined messages
+python analysis/dbc_decode.py logs/capture.csv --dbc toyota_4runner.dbc
+
+# Decode specific CAN IDs only
+python analysis/dbc_decode.py logs/capture.csv --dbc toyota.dbc --ids 0x024 0x025
+
+# Compare broadcast vs diagnostic data
+python analysis/dbc_decode.py logs/capture.csv --dbc toyota.dbc --compare-obd
+```
+
+**Output:** Creates one CSV per message ID in `analysis/decoded/`:
+```
+analysis/decoded/capture_024_KINEMATICS.csv
+analysis/decoded/capture_025_STEERING_SENSOR.csv
+```
+
+**Requirements:** Python 3.6+, pandas, numpy, cantools
+```bash
+pip install pandas numpy cantools
+```
+
+See [BINARY_LOGGING.md](BINARY_LOGGING.md) for binary format specification and detailed usage.
+
+---
+
+## Analysis Scripts (scripts/)
+
+Scripts in the `scripts/` directory analyze CSV and text log files.
 
 ### 1. decode_with_obdb.py - Enhanced OBDb Decoder ⭐ RECOMMENDED
 Advanced decoder that integrates Toyota 4Runner OBDb database for accurate signal decoding.

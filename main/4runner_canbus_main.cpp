@@ -64,11 +64,12 @@ static void log_lvgl_mem(const char *context)
 #define METER_REQUEST_ID 0x7C0
 #define WHEEL_SPEED_BROADCAST_ID 0x0AA
 #define VEHICLE_SPEED_BROADCAST_ID 0x0B4
-#define GEAR_BROADCAST_ID_025 0x025
+#define KINEMATICS_BROADCAST_ID_024 0x024
+#define GEAR_BROADCAST_ID_025 0x025  // DBC maps 0x025 to steering angle sensor
 #define RPM_BROADCAST_ID_1C4 0x1C4
 #define RPM_TEST_BROADCAST_ID 0x2C1
-#define ORIENTATION_CAND_ID_1D0 0x1D0
-#define CAN_LOGGER_RING_BUFFER_BYTES (2 * 1024 * 1024)  // 2 MB ring buffer (PSRAM)
+#define ORIENTATION_CAND_ID_1D0 0x1D0  // Gear candidate from correlation: byte 4
+#define CAN_LOGGER_RING_BUFFER_BYTES (4 * 1024 * 1024)  // 4 MB ring buffer (PSRAM)
 
 #define OBD_POLL_INTERVAL_MS 150
 #define CAN_TELEMETRY_INTERVAL_MS 2000
@@ -117,6 +118,41 @@ static const int lcd_i2c_scl_io_num = 9;
 static const int lcd_i2c_freq_hz = 400000;
 static const int lcd_touch_reset_io_num = 4;
 static const int lcd_touch_int_io_num = -1;
+
+static uint32_t extract_be_signal_lsb_start(const uint8_t *data, uint8_t start_bit, uint8_t length)
+{
+    uint32_t value = 0;
+    int byte_index = start_bit / 8;
+    int bit_index = start_bit % 8;  // 0 = LSB
+
+    for (uint8_t i = 0; i < length; i++) {
+        uint8_t bit = (data[byte_index] >> bit_index) & 0x01;
+        value = (value << 1) | bit;
+        if (bit_index == 0) {
+            byte_index++;
+            bit_index = 7;
+        } else {
+            bit_index--;
+        }
+    }
+
+    return value;
+}
+
+static int32_t sign_extend(uint32_t value, uint8_t bit_length)
+{
+    if (bit_length == 0 || bit_length >= 32) {
+        return (int32_t)value;
+    }
+
+    uint32_t sign_bit = 1u << (bit_length - 1);
+    if (value & sign_bit) {
+        uint32_t mask = (1u << bit_length) - 1u;
+        value |= ~mask;
+    }
+
+    return (int32_t)value;
+}
 
 // OBD Request Definition
 typedef struct {
@@ -360,6 +396,31 @@ static void handle_broadcast_rpm_test(const twai_message_t *msg)
     metrics_unlock();
 }
 
+static void handle_broadcast_kinematics_024(const twai_message_t *msg)
+{
+    if (msg->data_length_code < 8) {
+        return;
+    }
+
+    metrics_lock();
+    can_metrics_t *m = metrics_get_for_update();
+
+    uint32_t raw_yaw = extract_be_signal_lsb_start(msg->data, 1, 10);
+    uint32_t raw_torque = extract_be_signal_lsb_start(msg->data, 17, 10);
+    uint32_t raw_accel = extract_be_signal_lsb_start(msg->data, 33, 10);
+
+    int32_t yaw_rate = (int32_t)raw_yaw - 512;
+    int32_t steer_torque = (int32_t)raw_torque - 512;
+    int32_t accel_y = (int32_t)raw_accel - 512;
+
+    m->bcast_yaw_rate_deg_sec = (float)yaw_rate;
+    m->bcast_steering_torque = (float)steer_torque;
+    m->bcast_lateral_g = (accel_y * -0.002121f) - 0.0126f;
+    m->bcast_kinematics_valid = true;
+
+    metrics_unlock();
+}
+
 static void handle_broadcast_candidate_1d0(const twai_message_t *msg)
 {
     if (msg->data_length_code < 8) {
@@ -381,6 +442,10 @@ static void handle_broadcast_candidate_025(const twai_message_t *msg)
 
     metrics_lock();
     can_metrics_t *m = metrics_get_for_update();
+    uint32_t raw_angle = extract_be_signal_lsb_start(msg->data, 3, 12);
+    int32_t signed_angle = sign_extend(raw_angle, 12);
+    m->bcast_steering_angle_deg = signed_angle * 1.5f;
+    m->bcast_steer_angle_valid = true;
     memcpy(m->cand_025_raw, msg->data, sizeof(m->cand_025_raw));
     m->cand_025_valid = true;
     metrics_unlock();
@@ -500,6 +565,11 @@ static void process_obd_response(const twai_message_t *msg)
 
     if (msg->identifier == RPM_TEST_BROADCAST_ID) {
         handle_broadcast_rpm_test(msg);
+        return;
+    }
+
+    if (msg->identifier == KINEMATICS_BROADCAST_ID_024) {
+        handle_broadcast_kinematics_024(msg);
         return;
     }
 

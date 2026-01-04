@@ -68,11 +68,18 @@ typedef struct {
     float longitudinal_g;
     float yaw_rate_deg_sec;
     float steering_angle_deg;
+    // Broadcast orientation data (from 0x024 and 0x025)
+    float bcast_lateral_g;
+    float bcast_yaw_rate_deg_sec;
+    float bcast_steering_angle_deg;
+    float bcast_steering_torque;
     float zp_decel_1;
     float zp_decel_2;
     float zp_yaw_rate;
     bool orientation_valid;
     bool orientation_zp_valid;
+    bool bcast_kinematics_valid;
+    bool bcast_steer_angle_valid;
     // Validity flags
     bool rpm_valid;
     bool vbatt_valid;

@@ -2,9 +2,8 @@
  * CAN Logger Component
  *
  * Provides CAN message logging to SD card with ring buffer for efficient
- * writes. Messages are stored in CSV format compatible with existing logs.
- *
- * Format: timestamp_us,can_id,dlc,byte0,byte1,...,byte7
+ * writes. Messages are stored in a fixed-size binary format with a
+ * versioned header.
  */
 
 #pragma once

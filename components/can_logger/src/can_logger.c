@@ -6,8 +6,9 @@
  * on SD card operations.
  */
 
-#include <stdio.h>
+#include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/ringbuf.h>
@@ -29,8 +30,38 @@ typedef struct {
     can_logger_message_t msg;
 } ring_buffer_item_t;
 
-// Write buffer size (characters) - larger buffer for fewer SD writes
-#define WRITE_BUFFER_SIZE 131072
+#define CAN_BIN_MAGIC "CANBIN\0"
+#define CAN_BIN_VERSION 1
+#define CAN_BIN_HEADER_SIZE 64
+#define CAN_BIN_RECORD_SIZE 24
+
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint16_t version;
+    uint16_t header_size;
+    uint64_t log_start_unix_us;
+    uint64_t log_start_monotonic_us;
+    uint32_t record_size;
+    uint32_t flags;
+    uint8_t reserved[28];
+} can_bin_header_v1_t;
+
+typedef struct __attribute__((packed)) {
+    uint64_t timestamp_us;
+    uint32_t can_id;
+    uint8_t dlc;
+    uint8_t flags;
+    uint8_t data[8];
+    uint16_t reserved;
+} can_bin_record_v1_t;
+
+_Static_assert(sizeof(can_bin_header_v1_t) == CAN_BIN_HEADER_SIZE,
+               "Binary header size mismatch");
+_Static_assert(sizeof(can_bin_record_v1_t) == CAN_BIN_RECORD_SIZE,
+               "Binary record size mismatch");
+
+// Write buffer size (bytes) - tuned for binary records
+#define WRITE_BUFFER_SIZE 65536
 #define WRITER_TASK_STACK_SIZE 4096
 #define WRITER_TASK_PRIORITY 5  // Higher priority for keeping up with CAN traffic
 #define FLUSH_INTERVAL_MS 1000
@@ -46,6 +77,8 @@ static struct {
     void *log_file;
     char current_file[64];
     can_logger_stats_t stats;
+    uint64_t log_start_unix_us;
+    uint64_t log_start_monotonic_us;
     char *write_buffer;
     size_t write_buffer_size;
     size_t write_buffer_pos;
@@ -63,6 +96,33 @@ static struct {
     .write_buffer_pos = 0,
     .last_flush_time = 0
 };
+
+static bool rtc_datetime_to_unix_us(const pcf_datetime_t *time, uint64_t *unix_us_out)
+{
+    if (!time || !unix_us_out)
+    {
+        return false;
+    }
+
+    struct tm tm_time = {
+        .tm_year = time->year - 1900,
+        .tm_mon = time->month - 1,
+        .tm_mday = time->day,
+        .tm_hour = time->hour,
+        .tm_min = time->min,
+        .tm_sec = time->sec,
+        .tm_isdst = -1
+    };
+
+    time_t epoch = mktime(&tm_time);
+    if (epoch < 0)
+    {
+        return false;
+    }
+
+    *unix_us_out = ((uint64_t)epoch) * 1000000ULL;
+    return true;
+}
 
 static void update_stat_atomic(uint32_t *stat, int32_t delta)
 {
@@ -102,7 +162,7 @@ static esp_err_t flush_write_buffer(void)
     return ESP_OK;
 }
 
-static esp_err_t buffer_write(const char *data, size_t len)
+static esp_err_t buffer_write(const void *data, size_t len)
 {
     // If data won't fit, flush first
     if (!s_logger.write_buffer || s_logger.write_buffer_size == 0)
@@ -141,43 +201,65 @@ static esp_err_t buffer_write(const char *data, size_t len)
     return ESP_OK;
 }
 
-static void format_and_write_message(const ring_buffer_item_t *item)
+static esp_err_t write_bin_header(void)
 {
-    char line[160];
-    char datetime[24] = "";
+    can_bin_header_v1_t header = {0};
+    memcpy(header.magic, CAN_BIN_MAGIC, sizeof(header.magic));
+    header.version = CAN_BIN_VERSION;
+    header.header_size = CAN_BIN_HEADER_SIZE;
+    header.log_start_unix_us = s_logger.log_start_unix_us;
+    header.log_start_monotonic_us = s_logger.log_start_monotonic_us;
+    header.record_size = CAN_BIN_RECORD_SIZE;
+    header.flags = 0;
 
-    // Get wall-clock time if available
-    pcf_datetime_t now;
-    if (pcf_rtc_is_time_valid() && pcf_rtc_get_time(&now) == ESP_OK)
+    esp_err_t err = buffer_write(&header, sizeof(header));
+    if (err != ESP_OK)
     {
-        pcf_rtc_format_display(datetime, sizeof(datetime), &now);
+        update_stat_atomic(&s_logger.stats.write_errors, 1);
+        return err;
     }
 
-    int len = snprintf(line, sizeof(line),
-                       "%s,%lld,%03lX,%d,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X\n",
-                       datetime,
-                       item->timestamp_us,
-                       (unsigned long)item->msg.identifier,
-                       item->msg.data_length_code,
-                       item->msg.data[0], item->msg.data[1],
-                       item->msg.data[2], item->msg.data[3],
-                       item->msg.data[4], item->msg.data[5],
-                       item->msg.data[6], item->msg.data[7]);
+    return ESP_OK;
+}
 
-    if (len > 0 && (size_t)len < sizeof(line))
+static esp_err_t write_bin_record(const ring_buffer_item_t *item)
+{
+    can_bin_record_v1_t record = {0};
+    record.timestamp_us = (uint64_t)item->timestamp_us;
+    record.can_id = item->msg.identifier;
+    record.dlc = item->msg.data_length_code;
+    record.flags = 0;
+    memcpy(record.data, item->msg.data, sizeof(record.data));
+    record.reserved = 0;
+
+    esp_err_t err = buffer_write(&record, sizeof(record));
+    if (err == ESP_OK)
     {
-        buffer_write(line, len);
         update_stat_atomic(&s_logger.stats.messages_logged, 1);
     }
+    else
+    {
+        update_stat_atomic(&s_logger.stats.write_errors, 1);
+    }
+
+    return err;
 }
 
 static void writer_task(void *arg)
 {
     ESP_LOGI(TAG, "Writer task started");
 
-    // Write CSV header
-    const char *header = "datetime,timestamp_us,can_id,dlc,b0,b1,b2,b3,b4,b5,b6,b7\n";
-    buffer_write(header, strlen(header));
+    if (write_bin_header() != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to write binary header");
+        s_logger.state = CAN_LOGGER_ERROR;
+        flush_write_buffer();
+        sd_card_flush(s_logger.log_file);
+        ESP_LOGI(TAG, "Writer task stopped");
+        vTaskDelete(NULL);
+        return;
+    }
+
     flush_write_buffer();
 
     while (s_logger.state == CAN_LOGGER_RUNNING)
@@ -189,12 +271,12 @@ static void writer_task(void *arg)
         ring_buffer_item_t *item;
         while ((item = xRingbufferReceive(s_logger.ring_buffer, &item_size, 0)) != NULL)
         {
-            format_and_write_message(item);
+            write_bin_record(item);
             vRingbufferReturnItem(s_logger.ring_buffer, item);
             messages_processed++;
 
-            // Flush write buffer when nearly full (160 = max CSV line size)
-            if (s_logger.write_buffer_pos > s_logger.write_buffer_size - 160)
+            // Flush write buffer when nearly full (record size = 24 bytes)
+            if (s_logger.write_buffer_pos > s_logger.write_buffer_size - CAN_BIN_RECORD_SIZE)
             {
                 flush_write_buffer();
             }
@@ -206,7 +288,7 @@ static void writer_task(void *arg)
             item = xRingbufferReceive(s_logger.ring_buffer, &item_size, pdMS_TO_TICKS(20));
             if (item)
             {
-                format_and_write_message(item);
+                write_bin_record(item);
                 vRingbufferReturnItem(s_logger.ring_buffer, item);
             }
         }
@@ -225,7 +307,7 @@ static void writer_task(void *arg)
     ring_buffer_item_t *item;
     while ((item = xRingbufferReceive(s_logger.ring_buffer, &item_size, 0)) != NULL)
     {
-        format_and_write_message(item);
+        write_bin_record(item);
         vRingbufferReturnItem(s_logger.ring_buffer, item);
     }
 
@@ -378,7 +460,7 @@ esp_err_t can_logger_start(void)
     }
 
     // Create new log file with RTC timestamp in name
-    s_logger.log_file = sd_card_create_log_file_with_timestamp("CAN", "CSV",
+    s_logger.log_file = sd_card_create_log_file_with_timestamp("CAN", "bin",
                                                                 s_logger.current_file,
                                                                 sizeof(s_logger.current_file));
     if (!s_logger.log_file)
@@ -395,6 +477,19 @@ esp_err_t can_logger_start(void)
 
     s_logger.write_buffer_pos = 0;
     s_logger.last_flush_time = esp_timer_get_time() / 1000;
+
+    s_logger.log_start_unix_us = 0;
+    s_logger.log_start_monotonic_us = (uint64_t)esp_timer_get_time();
+    pcf_datetime_t rtc_now;
+    if (pcf_rtc_is_time_valid() && pcf_rtc_get_time(&rtc_now) == ESP_OK)
+    {
+        uint64_t unix_us = 0;
+        if (rtc_datetime_to_unix_us(&rtc_now, &unix_us))
+        {
+            s_logger.log_start_unix_us = unix_us;
+            s_logger.log_start_monotonic_us = (uint64_t)esp_timer_get_time();
+        }
+    }
     s_logger.state = CAN_LOGGER_RUNNING;
 
     // Start writer task

@@ -109,6 +109,7 @@ def extract_diag_signals(df):
     std_mask = (diag["can_id"] == "7E8") & (diag["service"] == "41")
     add_signal("rpm", std_mask & (diag["pid"] == "0C"), (b3 * 256 + b4) / 4.0)
     add_signal("vehicle_speed_kph", std_mask & (diag["pid"] == "0D"), b3.astype(float))
+    add_signal("throttle_pct", std_mask & (diag["pid"] == "11"), (b3.astype(float) * 100.0) / 255.0)
     add_signal("vbatt_v", std_mask & (diag["pid"] == "42"), (b3 * 256 + b4) / 1000.0)
     add_signal("iat_c", std_mask & (diag["pid"] == "0F"), b3.astype(float) - 40.0)
     add_signal("baro_kpa", std_mask & (diag["pid"] == "33"), b3.astype(float))

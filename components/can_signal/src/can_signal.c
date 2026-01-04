@@ -11,8 +11,12 @@ uint32_t can_signal_extract_be_lsb(const uint8_t *data, uint8_t start_bit, uint8
         return 0;
     }
 
+    if (start_bit >= 64) {
+        return 0;
+    }
+
     uint32_t value = 0;
-    int byte_index = start_bit / 8;
+    unsigned int byte_index = start_bit / 8;
     int bit_index = start_bit % 8;  // 0 = LSB of byte
 
     for (uint8_t i = 0; i < length; i++) {

@@ -62,6 +62,7 @@ coverage/
 *.cover
 htmlcov/
 .pytest_cache/
+test/build/
 
 # Debug files
 *.dSYM/

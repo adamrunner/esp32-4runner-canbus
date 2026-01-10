@@ -3,6 +3,7 @@ logs/
 *.log
 *_clean.log
 analysis/decoded/
+analysis/screenshots/
 analysis/*.csv
 
 .cache

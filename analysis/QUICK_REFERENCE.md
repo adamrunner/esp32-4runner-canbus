@@ -41,9 +41,9 @@ Raw: 0x8012 = 32,786
 ### 3. Speed Proxy / Sensor - CAN ID 0x0B4 (23-33 Hz, 88.6% variation)
 
 **To Test:**
-- **Update**: byte 5 correlates almost perfectly with wheel speed (kph)
-- Treat 0x0B4 as a vehicle speed proxy; throttle likely elsewhere (0x2C1?)
-- Verify mapping on new logs (speed ~= 2.5 * b5 + 0.6)
+- **Update**: bytes 5-6 as big-endian 16-bit, `/100` tracks wheel speed very closely.
+- Byte 5 alone is a coarse proxy (~2.5 * b5), but less accurate than b5-6.
+- Treat 0x0B4 as a vehicle speed proxy; throttle likely elsewhere (0x2C1?).
 
 ### 4. Transmission/Status - CAN ID 0x2C1 (18-25 Hz, 86.8% variation)
 

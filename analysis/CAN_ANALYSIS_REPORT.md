@@ -123,9 +123,10 @@ High-variation IDs in both logs:
 
 ### Correlation Highlights
 
-- **0x0B4 byte 5 correlates almost perfectly with wheel speed (0x0AA)**:
-  - Speed (kph) ~= 2.53 * b5 + 0.6 (r ~= 1.00 in both logs)
-  - Strongly suggests 0x0B4 is a vehicle speed proxy, not throttle %
+- **0x0B4 bytes 5-6 (big-endian) track wheel speed (0x0AA) extremely closely**:
+  - Speed (kph) ~= b56 / 100 (RMSE ~0.2-0.6 kph in recent logs)
+  - b5 alone is a coarse proxy (~2.5 * b5), but less accurate
+  - Confirms 0x0B4 is a vehicle speed proxy, not throttle %
 - **0x2C1 shows moderate correlation with acceleration** (b6 / b6b7)
   - Better throttle/torque candidate than 0x0B4 for these logs
 - **0x1D0 b4 and 0x1C4 b2 correlate with speed, but scale shifts between logs**
@@ -154,7 +155,7 @@ Based on frequency and data variation, these CAN IDs are top candidates for vehi
 
 **0x0B4**: 23-33 Hz, 88.6% variation rate
 - Very dynamic data, similar update rate to wheel speeds
-- **Update**: byte 5 correlates almost perfectly with wheel speed (kph)
+- **Update**: bytes 5-6 (big-endian) / 100 == vehicle speed (kph)
 - Treat as speed proxy; throttle is likely elsewhere (see 0x2C1)
 
 **0x2C1**: 18-25 Hz, 86.8-92.8% variation rate
@@ -249,10 +250,8 @@ Based on frequency and data variation, these CAN IDs are top candidates for vehi
 For each candidate CAN ID, test specific hypotheses:
 
 #### CAN ID 0x0B4 (High variation, 23-33 Hz)
-- **Hypothesis 1**: Vehicle speed proxy (byte 5)
-- **Hypothesis 2**: Brake pressure (multi-byte)
-- **Hypothesis 3**: Steering angle (signed 16-bit)
-- **Test**: Compare 0x0B4 b5 vs wheel speed; verify linear mapping on new logs
+- **Confirmed**: Vehicle speed proxy (bytes 5-6, big-endian, kph = raw / 100)
+- **Test**: Continue validating on new logs; compare b56 / 100 vs wheel avg
 
 #### CAN ID 0x2C1 (High variation, 18-25 Hz)
 - **Hypothesis 1**: Engine RPM (multi-byte, 16 or 32-bit)
@@ -393,7 +392,7 @@ The analysis successfully validated the wheel speed broadcast (0x0AA) decoding a
 **Top Candidates**:
 1. **0x024**: Likely engine RPM (46-65 Hz frequency matches typical engine sensors)
 2. **0x2C1**: Highly dynamic (92.8% variation), likely transmission or engine data
-3. **0x0B4**: High variation, likely vehicle speed proxy (b5 ~ speed)
+3. **0x0B4**: High variation, vehicle speed proxy (b5-6 big-endian / 100)
 4. **0x1D0**: Moderate variation, likely gear or status information
 5. **0x1C4**: Varies between logs, likely mode or vehicle status
 

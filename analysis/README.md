@@ -194,7 +194,7 @@ Based on frequency and data variation:
 
 3. **0x0B4** (23-33 Hz, 88.6% variation)
    - Very dynamic
-   - Likely: Vehicle speed proxy (byte 5 ~ speed)
+   - Likely: Vehicle speed proxy (bytes 5-6 big-endian, kph = raw / 100)
 
 4. **0x1D0** (18-25 Hz, 44.8-59.9% variation)
    - Moderate variation

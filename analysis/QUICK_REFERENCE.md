@@ -59,6 +59,14 @@ Raw: 0x8012 = 32,786
 - Check bit flags vs enumerated values
 - Correlate with drive mode (4WD vs 2WD, sport mode, etc.)
 
+### 6. ECT Candidate - CAN ID 0x3BB (Idle Warm-up)
+
+**Observation:**
+- In `CAN_20260125_132609`, OBD-II ECT rose ~33C → ~51C.
+- 0x3BB byte 2 tracked OBD-II ECT closely.
+  - Rough fit: `ECT ≈ 0.51 * b2 - 1.7` (b2 range 68..104)
+  - Next step: validate on a colder start log.
+
 ---
 
 ## Quick Test Commands

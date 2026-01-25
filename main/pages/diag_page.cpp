@@ -23,9 +23,11 @@ typedef struct {
     int page_index;
     lv_obj_t *rpm_value;
     lv_obj_t *throttle_value;
-    lv_obj_t *throttle_raw_value;
     lv_obj_t *vbatt_value;
     lv_obj_t *iat_value;
+    lv_obj_t *ect_value;
+    lv_obj_t *ect_candidate_value;
+    lv_obj_t *aat_value;
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
     lv_obj_t *can_toggle_label;
@@ -99,23 +101,25 @@ static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_t *grid = create_metrics_grid(page->container);
 
     lv_obj_t *card = create_metric_card(grid, "RPM", &data->rpm_value);
-    lv_obj_set_size(card, LV_PCT(48), 110);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "Throttle (%)", &data->throttle_value);
-    lv_obj_set_size(card, LV_PCT(48), 110);
-    data->throttle_raw_value = lv_label_create(card);
-    lv_label_set_text(data->throttle_raw_value, "0x0B4 b4-7: -- -- -- --");
-    lv_obj_set_style_text_font(data->throttle_raw_value, k_label_font, 0);
-    lv_obj_set_style_text_color(data->throttle_raw_value, k_muted_text_color, 0);
-    lv_obj_set_width(data->throttle_raw_value, LV_PCT(100));
-    lv_label_set_long_mode(data->throttle_raw_value, LV_LABEL_LONG_CLIP);
-    lv_obj_add_flag(data->throttle_raw_value, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "Battery (V)", &data->vbatt_value);
-    lv_obj_set_size(card, LV_PCT(48), 110);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "IAT (C)", &data->iat_value);
-    lv_obj_set_size(card, LV_PCT(48), 110);
+    lv_obj_set_size(card, LV_PCT(23), 110);
+
+    card = create_metric_card(grid, "ECT (C)", &data->ect_value);
+    lv_obj_set_size(card, LV_PCT(23), 110);
+
+    card = create_metric_card(grid, "ECT 3BB (C)", &data->ect_candidate_value);
+    lv_obj_set_size(card, LV_PCT(23), 110);
+
+    card = create_metric_card(grid, "Ambient (C)", &data->aat_value);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     lv_obj_t *autostart_row = lv_obj_create(page->container);
     lv_obj_set_width(autostart_row, LV_PCT(100));
@@ -205,15 +209,6 @@ static void diag_page_on_update(dm_page_t *page)
     }
     lv_label_set_text(data->throttle_value, buf);
 
-    if (snap.cand_0b4_valid) {
-        snprintf(buf, sizeof(buf), "0x0B4 b4-7: %02X %02X %02X %02X",
-                 snap.cand_0b4_raw[4], snap.cand_0b4_raw[5],
-                 snap.cand_0b4_raw[6], snap.cand_0b4_raw[7]);
-    } else {
-        snprintf(buf, sizeof(buf), "0x0B4 b4-7: -- -- -- --");
-    }
-    lv_label_set_text(data->throttle_raw_value, buf);
-
     if (snap.vbatt_valid) {
         snprintf(buf, sizeof(buf), "%.2f", snap.vbatt_v);
     } else {
@@ -227,6 +222,27 @@ static void diag_page_on_update(dm_page_t *page)
         snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(data->iat_value, buf);
+
+    if (snap.ect_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.ect_c);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->ect_value, buf);
+
+    if (snap.ect_bcast_candidate_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.ect_bcast_candidate_c);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->ect_candidate_value, buf);
+
+    if (snap.aat_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.aat_c);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->aat_value, buf);
 
     update_page_counter(data->page_counter, data->page_index);
 }

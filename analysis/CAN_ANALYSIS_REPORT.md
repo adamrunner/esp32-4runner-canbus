@@ -306,6 +306,15 @@ Pattern in bytes 4-6: `78 78 78` or `82 82 82`
 
 **Recommendation**: Log gear from diagnostics (PID 0x85) and correlate with 0x025 bytes 4-6 to find mapping.
 
+### ECT Broadcast Candidate (Idle Log 2026-01-25)
+
+- OBD-II ECT (PID 0x05) ramped from ~33C to ~51C in `CAN_20260125_132609`.
+- 0x2C1 b0 stayed constant at `0x08` (=-32C if using `raw - 40`), so it is unlikely to be ECT.
+- **Strong candidate**: 0x3BB byte 2 tracked OBD-II ECT closely.
+  - Rough fit: `ECT ≈ 0.51 * b2 - 1.7`
+  - Observed range: `b2` = 68..104 during idle warm-up
+  - Next step: validate on a colder start log and compare with live OBD-II ECT.
+
 ### Testing Status in 0x1D0
 
 Bytes 0-2 show variation: `08 60 10` in log1 vs `00 00 00` in log2

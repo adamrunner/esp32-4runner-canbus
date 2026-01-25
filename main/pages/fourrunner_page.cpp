@@ -16,9 +16,9 @@ typedef struct {
     int page_index;
     lv_obj_t *atf_pan_value;
     lv_obj_t *atf_tqc_value;
+    lv_obj_t *ect_bcast_value;
     lv_obj_t *tqc_lockup_value;
     lv_obj_t *gear_value;
-    lv_obj_t *gear_raw_value;
     lv_obj_t *fuel_value;
     lv_obj_t *odo_value;
     lv_obj_t *page_counter;
@@ -54,29 +54,25 @@ static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_t *grid = create_metrics_grid(page->container);
 
     lv_obj_t *card = create_metric_card(grid, "ATF Pan (C)", &data->atf_pan_value);
-    lv_obj_set_size(card, LV_PCT(31), 110);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "ATF TQC (C)", &data->atf_tqc_value);
-    lv_obj_set_size(card, LV_PCT(31), 110);
+    lv_obj_set_size(card, LV_PCT(23), 110);
+
+    card = create_metric_card(grid, "ECT Bcast (C)", &data->ect_bcast_value);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "TQC Lockup", &data->tqc_lockup_value);
-    lv_obj_set_size(card, LV_PCT(31), 110);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "Gear", &data->gear_value);
-    lv_obj_set_size(card, LV_PCT(31), 110);
-    data->gear_raw_value = lv_label_create(card);
-    lv_label_set_text(data->gear_raw_value, "1D0 b4: --");
-    lv_obj_set_style_text_font(data->gear_raw_value, k_label_font, 0);
-    lv_obj_set_style_text_color(data->gear_raw_value, k_muted_text_color, 0);
-    lv_obj_set_width(data->gear_raw_value, LV_PCT(100));
-    lv_label_set_long_mode(data->gear_raw_value, LV_LABEL_LONG_CLIP);
-    lv_obj_add_flag(data->gear_raw_value, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "Fuel (gal)", &data->fuel_value);
-    lv_obj_set_size(card, LV_PCT(31), 110);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "Odometer (km)", &data->odo_value);
-    lv_obj_set_size(card, LV_PCT(31), 110);
+    lv_obj_set_size(card, LV_PCT(23), 110);
 
     create_nav_bar(page->container, &data->can_toggle_label);
     g_fourrunner_can_toggle_label = data->can_toggle_label;
@@ -134,6 +130,13 @@ static void fourrunner_page_on_update(dm_page_t *page)
     }
     lv_label_set_text(data->atf_tqc_value, buf);
 
+    if (snap.ect_broadcast_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.ect_broadcast_c);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    lv_label_set_text(data->ect_bcast_value, buf);
+
     if (snap.gear_valid) {
         snprintf(buf, sizeof(buf), "%s", snap.tqc_lockup ? "ON" : "OFF");
     } else {
@@ -147,13 +150,6 @@ static void fourrunner_page_on_update(dm_page_t *page)
         snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(data->gear_value, buf);
-
-    if (snap.cand_1d0_valid) {
-        snprintf(buf, sizeof(buf), "1D0 b4: %02X", snap.cand_1d0_raw[4]);
-    } else {
-        snprintf(buf, sizeof(buf), "1D0 b4: --");
-    }
-    lv_label_set_text(data->gear_raw_value, buf);
 
     if (snap.fuel_valid) {
         snprintf(buf, sizeof(buf), "%.1f", snap.fli_vol_gal);

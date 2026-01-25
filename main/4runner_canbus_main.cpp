@@ -68,6 +68,7 @@ static void log_lvgl_mem(const char *context)
 #define KINEMATICS_BROADCAST_ID_024 0x024
 #define GEAR_BROADCAST_ID_025 0x025  // DBC maps 0x025 to steering angle sensor
 #define RPM_BROADCAST_ID_1C4 0x1C4
+#define ECT_CAND_BROADCAST_ID_3BB 0x3BB
 
 // Signal definitions for CAN ID 0x024 (Kinematics)
 // All signals are 10-bit with offset -512 (raw 0-1023 maps to -512 to +511)
@@ -152,8 +153,10 @@ static const obd_request_t k_request_sequence[] = {
     {OBD_REQUEST_ID, 0x01, 0x0D, 0},  // Vehicle speed
     {OBD_REQUEST_ID, 0x01, 0x11, 0},  // Throttle position
     {OBD_REQUEST_ID, 0x01, 0x42, 0},
+    {OBD_REQUEST_ID, 0x01, 0x05, 0},  // Engine coolant temp (ECT)
     {OBD_REQUEST_ID, 0x01, 0x0F, 0},
     {OBD_REQUEST_ID, 0x01, 0x33, 0},
+    {OBD_REQUEST_ID, 0x01, 0x46, 0},  // Ambient air temp (AAT)
     {OBD_REQUEST_ID, 0x21, 0x82, 0},
     {OBD_REQUEST_ID, 0x21, 0x85, 0},
     {OBD_REQUEST_ID, 0x21, 0x28, 0},
@@ -290,6 +293,22 @@ static void handle_standard_response(const twai_message_t *msg)
             }
             break;
         }
+        case 0x05: {
+            // Engine coolant temperature (OBD-II standard)
+            if (length >= 3) {
+                m->ect_c = (float)msg->data[3] - 40.0f;
+                m->ect_valid = true;
+            }
+            break;
+        }
+        case 0x46: {
+            // Ambient air temperature (OBD-II standard)
+            if (length >= 3) {
+                m->aat_c = (float)msg->data[3] - 40.0f;
+                m->aat_valid = true;
+            }
+            break;
+        }
         default:
             break;
     }
@@ -377,6 +396,28 @@ static void handle_broadcast_rpm_test(const twai_message_t *msg)
     m->bcast_rpm_valid = true;
     memcpy(m->cand_2c1_raw, msg->data, sizeof(m->cand_2c1_raw));
     m->cand_2c1_valid = true;
+
+    // Engine coolant temperature from broadcast 0x2C1 byte 0
+    m->ect_broadcast_c = msg->data[0] - 40.0f;
+    m->ect_broadcast_valid = true;
+
+    metrics_unlock();
+}
+
+static void handle_broadcast_ect_candidate_3bb(const twai_message_t *msg)
+{
+    if (msg->data_length_code < 3) {
+        return;
+    }
+
+    metrics_lock();
+    can_metrics_t *m = metrics_get_for_update();
+
+    // Candidate ECT from 0x3BB byte 2, derived from OBD-II correlation.
+    static const float k_ect_scale = 0.51f;
+    static const float k_ect_offset = -1.7f;
+    m->ect_bcast_candidate_c = (msg->data[2] * k_ect_scale) + k_ect_offset;
+    m->ect_bcast_candidate_valid = true;
 
     metrics_unlock();
 }
@@ -556,6 +597,11 @@ static void process_obd_response(const twai_message_t *msg)
 
     if (msg->identifier == RPM_TEST_BROADCAST_ID) {
         handle_broadcast_rpm_test(msg);
+        return;
+    }
+
+    if (msg->identifier == ECT_CAND_BROADCAST_ID_3BB) {
+        handle_broadcast_ect_candidate_3bb(msg);
         return;
     }
 

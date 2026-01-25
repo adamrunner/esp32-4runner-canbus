@@ -24,6 +24,11 @@ typedef struct {
     float rpm;
     float vbatt_v;
     float iat_c;
+    float ect_c;            // Engine coolant temp from OBD-II PID 0x05
+    float ect_broadcast_c;  // Engine coolant temp from broadcast 0x2C1
+    float ect_bcast_candidate_c;  // ECT broadcast candidate from 0x3BB byte 2
+    float eot_c;            // Engine oil temp from Toyota PID 0x51
+    float aat_c;            // Ambient air temp from OBD-II PID 0x46
     float baro_kpa;
     float throttle_pct;
     float atf_pan_c;
@@ -84,6 +89,11 @@ typedef struct {
     bool rpm_valid;
     bool vbatt_valid;
     bool iat_valid;
+    bool ect_valid;
+    bool ect_broadcast_valid;
+    bool ect_bcast_candidate_valid;
+    bool eot_valid;
+    bool aat_valid;
     bool baro_valid;
     bool throttle_valid;
     bool atf_valid;

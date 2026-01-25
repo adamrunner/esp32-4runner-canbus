@@ -32,6 +32,10 @@ This project uses an ESP32-S3 microcontroller to passively listen to the CAN bus
 **On-device logging (SD card):**
 The device logs CAN traffic directly to SD card in binary format (`.bin` files). Binary logging is compact and efficient, using only 24 bytes per message.
 
+**Sync SD card logs:**
+Copy `CAN_*.bin` (and any `CAN_*.csv` if present) from the SD card into `logs/`.
+If you use the Codex sync helper, it supports both `.bin` and `.csv` by default; override `--pattern` if needed.
+
 **Serial capture:**
 ```bash
 # Start capturing CAN bus traffic via serial
@@ -100,6 +104,7 @@ See [SCRIPTS_USAGE.md](SCRIPTS_USAGE.md) and [BINARY_LOGGING.md](BINARY_LOGGING.
 | 0x0B4 | Vehicle Speed | Speed (km/h) |
 | 0x1C4 | Throttle | Throttle position (%) |
 | 0x1D0 | Engine | RPM (rpm) |
+| 0x3BB | Engine Coolant (candidate) | ECT (C) from b2 (scaled) |
 
 ### OBD/Diagnostic Responses
 

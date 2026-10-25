@@ -64,6 +64,13 @@ static void log_lvgl_mem(const char *context)
 #define OBD_RESPONSE_ID_MAX 0x7EF
 #define ABS_REQUEST_ID 0x7B0
 #define METER_REQUEST_ID 0x7C0
+// 0x750 sub-ECUs found by the address sweep (see docs/TPMS_DECODING_NOTES.md). Neither is
+// the TPMS ECU: 0x40 is the main body ECU; 0xDC supports 21 03/05/07/08/E1/E2, with 21 08 =
+// supply voltage (0.1 V/count) and nothing that tracks tire pressure.
+#define BODY_EXT_ADDR 0x40
+#define SUBECU_DC_EXT_ADDR 0xDC
+#define DIAG_ID_RANGE_MIN 0x700
+#define DIAG_ID_RANGE_MAX 0x7FF
 #define WHEEL_SPEED_BROADCAST_ID 0x0AA
 #define VEHICLE_SPEED_BROADCAST_ID 0x0B4
 #define KINEMATICS_BROADCAST_ID_024 0x024
@@ -91,6 +98,25 @@ static void log_lvgl_mem(const char *context)
 #define CAN_LOGGER_RING_BUFFER_BYTES (4 * 1024 * 1024)  // 4 MB ring buffer (PSRAM)
 
 #define OBD_POLL_INTERVAL_MS 150
+
+// Boot-time diagnostics for exploring the 0x750 sub-ECUs, all off by default; each delays
+// normal polling while it runs. The address sweep sends tester present to every extended
+// address and lists who answers on 0x758 (~13 s), then asks each responder for the TPMS
+// PIDs and sweeps 21 00-FF on k_tpms_pid_sweep_addr (~30 s).
+static constexpr bool k_tpms_sweep_on_boot = false;
+static constexpr uint32_t k_tpms_sweep_interval_ms = 50;
+static constexpr uint32_t k_tpms_sweep_settle_ms = 500;
+static constexpr uint32_t k_tpms_probe_interval_ms = 300;
+static constexpr uint8_t k_tpms_pid_sweep_addr = SUBECU_DC_EXT_ADDR;
+static constexpr uint32_t k_tpms_pid_sweep_interval_ms = 100;
+// KWP 1A (read ECU identification) to the 0x750 sub-ECUs (~16 s). On this truck each
+// answers only 1A 81, with a five-character code (0x40 "35240", 0xDC "35010").
+static constexpr bool k_ecu_ident_on_boot = false;
+static constexpr uint8_t k_ecu_ident_addrs[] = {BODY_EXT_ADDR, SUBECU_DC_EXT_ADDR};
+static constexpr uint8_t k_ecu_ident_first_option = 0x80;
+static constexpr uint8_t k_ecu_ident_last_option = 0x9F;
+static constexpr uint32_t k_ecu_ident_interval_ms = 250;
+#define KWP_SID_READ_ECU_ID 0x1A
 #define CAN_TELEMETRY_INTERVAL_MS 2000
 
 // LCD Configuration
@@ -145,7 +171,7 @@ static const int lcd_touch_int_io_num = -1;
 typedef struct {
     uint16_t header;
     uint8_t service;
-    uint8_t pid;
+    uint16_t pid;  // values above 0xFF are sent as a two-byte UDS data identifier
     uint8_t ext_addr;
 } obd_request_t;
 
@@ -165,9 +191,8 @@ static const obd_request_t k_request_sequence[] = {
     {ABS_REQUEST_ID, 0x21, 0x03, 0},
     {ABS_REQUEST_ID, 0x21, 0x46, 0},  // Orientation zero points
     {ABS_REQUEST_ID, 0x21, 0x47, 0},  // Orientation live data
-    // TPMS ECU (OBDb 4Runner signal set; unconfirmed on this truck, see tpms_diag.h)
-    {TPMS_DIAG_REQUEST_ID, TPMS_DIAG_SID, TPMS_DIAG_PID_PRESSURE, TPMS_DIAG_EXT_ADDR},
-    {TPMS_DIAG_REQUEST_ID, TPMS_DIAG_SID, TPMS_DIAG_PID_TEMP, TPMS_DIAG_EXT_ADDR},
+    // No TPMS requests: OBDb's TPMS ECU (0x750 ext 2A) does not exist on this 2018 truck's
+    // DLC3 CAN, and no other ECU there carries tire pressure (docs/TPMS_DECODING_NOTES.md).
 };
 
 // TWAI Configuration
@@ -191,22 +216,29 @@ static const twai_general_config_t g_config = {
 };
 
 // CAN Message Building
-static twai_message_t build_obd_request(uint16_t header, uint8_t service, uint8_t pid, uint8_t ext_addr)
+static twai_message_t build_obd_request(uint16_t header, uint8_t service, uint16_t pid, uint8_t ext_addr)
 {
     twai_message_t msg = {};
 
     msg.identifier = header;
     msg.data_length_code = 8;
 
+    // Extended addressing puts the target address before the ISO-TP PCI byte
+    uint8_t *pci = msg.data;
     if (ext_addr != 0) {
         msg.data[0] = ext_addr;
-        msg.data[1] = 0x02;
-        msg.data[2] = service;
-        msg.data[3] = pid;
+        pci = &msg.data[1];
+    }
+
+    if (pid > 0xFF) {
+        pci[0] = 0x03;
+        pci[1] = service;
+        pci[2] = (uint8_t)(pid >> 8);
+        pci[3] = (uint8_t)(pid & 0xFF);
     } else {
-        msg.data[0] = 0x02;
-        msg.data[1] = service;
-        msg.data[2] = pid;
+        pci[0] = 0x02;
+        pci[1] = service;
+        pci[2] = (uint8_t)pid;
     }
 
     return msg;
@@ -578,11 +610,20 @@ static void handle_extended_response(const twai_message_t *msg)
     metrics_unlock();
 }
 
-// TPMS ECU replies on 0x758 with extended addressing. Only the RX task calls
-// this, so the reassembly state needs no lock.
+// Extended addresses seen in 0x758 replies, one bit each. Set by the RX task,
+// read by the TX task once the sweep has settled; a stale read only delays a log line.
+static volatile uint32_t s_tpms_seen_addrs[256 / 32];
+
+// 0x750 sub-ECUs (TPMS at ext 2A, if present) reply on 0x758 with extended addressing.
+// Only the RX task calls this, so the reassembly state needs no lock.
 static void handle_tpms_diag_frame(const twai_message_t *msg)
 {
     static tpms_diag_rx_t s_tpms_rx;
+
+    if (msg->data_length_code > 0) {
+        uint8_t addr = msg->data[0];
+        s_tpms_seen_addrs[addr / 32] |= 1u << (addr % 32);
+    }
 
     ESP_LOGI(TAG, "TPMS RX: %02X %02X %02X %02X %02X %02X %02X %02X",
              msg->data[0], msg->data[1], msg->data[2], msg->data[3],
@@ -594,6 +635,7 @@ static void handle_tpms_diag_frame(const twai_message_t *msg)
         fc.identifier = TPMS_DIAG_REQUEST_ID;
         fc.data_length_code = 8;
         tpms_diag_build_flow_control(fc.data);
+        fc.data[0] = msg->data[0];  // answer whichever sub-ECU is sending
         esp_err_t err = twai_transmit(&fc, pdMS_TO_TICKS(10));
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "TPMS flow control failed: %s", esp_err_to_name(err));
@@ -605,6 +647,32 @@ static void handle_tpms_diag_frame(const twai_message_t *msg)
         return;
     }
     if (res != TPMS_DIAG_RX_COMPLETE) {
+        return;
+    }
+
+    // Other sub-ECUs behind 0x750 (found by the sweep) also reply here; only log them
+    if (msg->data[0] != TPMS_DIAG_EXT_ADDR) {
+        // Static: only the RX task gets here, and its stack is small
+        static char hex[TPMS_DIAG_MAX_PAYLOAD * 3 + 1];
+        static char ascii[TPMS_DIAG_MAX_PAYLOAD + 1];
+        size_t pos = 0;
+        for (size_t i = 0; i < s_tpms_rx.received_len; i++) {
+            uint8_t b = s_tpms_rx.payload[i];
+            pos += snprintf(hex + pos, sizeof(hex) - pos, " %02X", b);
+            ascii[i] = (b >= 0x20 && b < 0x7F) ? (char)b : '.';
+        }
+        ascii[s_tpms_rx.received_len] = '\0';
+        ESP_LOGI(TAG, "Sub-ECU 0x%02X reply (%u bytes):%s", msg->data[0],
+                 (unsigned)s_tpms_rx.received_len, hex);
+        if (s_tpms_rx.payload[0] == KWP_SID_READ_ECU_ID + 0x40) {
+            ESP_LOGI(TAG, "Sub-ECU 0x%02X ident 1A %02X: \"%s\"", msg->data[0],
+                     s_tpms_rx.payload[1], ascii);
+        }
+        return;
+    }
+
+    if (s_tpms_rx.payload[0] == TPMS_DIAG_SID_TESTER + 0x40) {
+        ESP_LOGI(TAG, "TPMS ECU answered tester present");
         return;
     }
 
@@ -633,12 +701,13 @@ static void handle_tpms_diag_frame(const twai_message_t *msg)
     metrics_unlock();
 
     if (nrc) {
-        ESP_LOGW(TAG, "TPMS negative response, NRC 0x%02X", nrc);
+        ESP_LOGW(TAG, "TPMS negative response to SID 0x%02X, NRC 0x%02X",
+                 s_tpms_rx.payload[1], nrc);
     } else if (is_pressure || is_temp) {
-        ESP_LOGI(TAG, "TPMS %s FL=%.1f FR=%.1f RL=%.1f RR=%.1f spare=%.1f (%s)",
+        ESP_LOGI(TAG, "TPMS %s FL=%.1f FR=%.1f RL=%.1f RR=%.1f spare=%.1f (reply %02X %02X)",
                  is_pressure ? "PSI" : "C",
                  values.value[0], values.value[1], values.value[2], values.value[3],
-                 values.value[4], is_pressure ? "21 30" : "21 16");
+                 values.value[4], s_tpms_rx.payload[0], s_tpms_rx.payload[1]);
     } else {
         ESP_LOGW(TAG, "TPMS unrecognized payload, %u bytes, starts %02X %02X",
                  (unsigned)s_tpms_rx.received_len, s_tpms_rx.payload[0], s_tpms_rx.payload[1]);
@@ -697,6 +766,14 @@ static void process_obd_response(const twai_message_t *msg)
     }
 
     if (!is_obd_response_id(msg->identifier)) {
+        // Diagnostic replies land in 0x700-0x7FF; show any we don't recognize, in case
+        // an ECU (e.g. TPMS) answers on an ID we aren't expecting. Rare without requests.
+        if (msg->identifier >= DIAG_ID_RANGE_MIN && msg->identifier <= DIAG_ID_RANGE_MAX) {
+            ESP_LOGI(TAG, "Unhandled 0x%03lX: %02X %02X %02X %02X %02X %02X %02X %02X",
+                     (unsigned long)msg->identifier,
+                     msg->data[0], msg->data[1], msg->data[2], msg->data[3],
+                     msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
+        }
         return;
     }
 
@@ -756,12 +833,125 @@ static void can_rx_task(void *arg)
     }
 }
 
+static void run_tpms_address_sweep(void)
+{
+    ESP_LOGI(TAG, "TPMS sweep: tester present to 0x%03X, ext addr 0x00-0xFF",
+             TPMS_DIAG_REQUEST_ID);
+    memset((void *)s_tpms_seen_addrs, 0, sizeof(s_tpms_seen_addrs));
+
+    for (uint32_t addr = 0; addr <= 0xFF; addr++) {
+        if (can_state_is_paused()) {
+            ESP_LOGW(TAG, "TPMS sweep: CAN paused, stopping at 0x%02lX", (unsigned long)addr);
+            return;
+        }
+        // Address 0 means "no extended address" to build_obd_request, so build it here
+        twai_message_t msg = {};
+        msg.identifier = TPMS_DIAG_REQUEST_ID;
+        msg.data_length_code = 8;
+        msg.data[0] = (uint8_t)addr;
+        msg.data[1] = 0x02;
+        msg.data[2] = TPMS_DIAG_SID_TESTER;
+        msg.data[3] = 0x00;
+        esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(50));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "TPMS sweep: TX to ext 0x%02lX failed: %s",
+                     (unsigned long)addr, esp_err_to_name(err));
+        }
+        if ((addr & 0x3F) == 0x3F) {
+            ESP_LOGI(TAG, "TPMS sweep: sent through 0x%02lX", (unsigned long)addr);
+        }
+        vTaskDelay(pdMS_TO_TICKS(k_tpms_sweep_interval_ms));
+    }
+    vTaskDelay(pdMS_TO_TICKS(k_tpms_sweep_settle_ms));
+
+    uint8_t found[256];
+    uint32_t found_count = 0;
+    for (uint32_t addr = 0; addr <= 0xFF; addr++) {
+        if (s_tpms_seen_addrs[addr / 32] & (1u << (addr % 32))) {
+            ESP_LOGI(TAG, "TPMS sweep: reply on 0x%03X from ext addr 0x%02lX",
+                     TPMS_DIAG_RESPONSE_ID, (unsigned long)addr);
+            found[found_count++] = (uint8_t)addr;
+        }
+    }
+    ESP_LOGI(TAG, "TPMS sweep done: %lu address(es) answered", (unsigned long)found_count);
+
+    // Ask every responder for the TPMS identifiers; replies show up as "TPMS RX" lines
+    static const struct {
+        uint8_t service;
+        uint16_t pid;
+    } k_probes[] = {
+        {TPMS_DIAG_SID, TPMS_DIAG_PID_PRESSURE},
+        {TPMS_DIAG_SID, TPMS_DIAG_PID_PRESSURE_SET2},
+        {TPMS_DIAG_SID_UDS_READ, TPMS_DIAG_DID_PRESSURE},
+        {TPMS_DIAG_SID, TPMS_DIAG_PID_TEMP},
+    };
+    for (uint32_t i = 0; i < found_count; i++) {
+        for (size_t j = 0; j < sizeof(k_probes) / sizeof(k_probes[0]); j++) {
+            twai_message_t msg = build_obd_request(TPMS_DIAG_REQUEST_ID, k_probes[j].service,
+                                                   k_probes[j].pid, found[i]);
+            ESP_LOGI(TAG, "TPMS probe ext 0x%02X: %02X %02X %02X %02X %02X", found[i],
+                     msg.data[0], msg.data[1], msg.data[2], msg.data[3], msg.data[4]);
+            esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(50));
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "TPMS probe TX failed: %s", esp_err_to_name(err));
+            }
+            vTaskDelay(pdMS_TO_TICKS(k_tpms_probe_interval_ms));
+        }
+    }
+
+    ESP_LOGI(TAG, "TPMS PID sweep: 21 00-FF to ext 0x%02X", k_tpms_pid_sweep_addr);
+    for (uint32_t pid = 0; pid <= 0xFF; pid++) {
+        if (can_state_is_paused()) {
+            return;
+        }
+        twai_message_t msg = build_obd_request(TPMS_DIAG_REQUEST_ID, TPMS_DIAG_SID,
+                                               (uint16_t)pid, k_tpms_pid_sweep_addr);
+        esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(50));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "TPMS PID sweep: TX 21 %02lX failed: %s",
+                     (unsigned long)pid, esp_err_to_name(err));
+        }
+        vTaskDelay(pdMS_TO_TICKS(k_tpms_pid_sweep_interval_ms));
+    }
+    vTaskDelay(pdMS_TO_TICKS(k_tpms_sweep_settle_ms));
+    ESP_LOGI(TAG, "TPMS PID sweep done");
+}
+
+static void run_ecu_ident_probe(void)
+{
+    for (size_t i = 0; i < sizeof(k_ecu_ident_addrs); i++) {
+        ESP_LOGI(TAG, "ECU ident: 1A %02X-%02X to 0x%03X ext 0x%02X", k_ecu_ident_first_option,
+                 k_ecu_ident_last_option, TPMS_DIAG_REQUEST_ID, k_ecu_ident_addrs[i]);
+        for (uint32_t opt = k_ecu_ident_first_option; opt <= k_ecu_ident_last_option; opt++) {
+            if (can_state_is_paused()) {
+                return;
+            }
+            twai_message_t msg = build_obd_request(TPMS_DIAG_REQUEST_ID, KWP_SID_READ_ECU_ID,
+                                                   (uint16_t)opt, k_ecu_ident_addrs[i]);
+            esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(50));
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "ECU ident: TX 1A %02lX failed: %s", (unsigned long)opt,
+                         esp_err_to_name(err));
+            }
+            vTaskDelay(pdMS_TO_TICKS(k_ecu_ident_interval_ms));
+        }
+    }
+    ESP_LOGI(TAG, "ECU ident done");
+}
+
 static void can_tx_task(void *arg)
 {
     (void)arg;
     size_t request_index = 0;
 
     ESP_LOGI(TAG, "CAN TX task started");
+
+    if (k_tpms_sweep_on_boot) {
+        run_tpms_address_sweep();
+    }
+    if (k_ecu_ident_on_boot) {
+        run_ecu_ident_probe();
+    }
 
     while (1) {
         if (can_state_is_paused()) {
@@ -772,7 +962,7 @@ static void can_tx_task(void *arg)
         const obd_request_t *req = &k_request_sequence[request_index];
         twai_message_t msg = build_obd_request(req->header, req->service, req->pid, req->ext_addr);
 
-        if (req->header == METER_REQUEST_ID) {
+        if (req->header == METER_REQUEST_ID || req->header == TPMS_DIAG_REQUEST_ID) {
             ESP_LOGI(TAG, "TX to 0x%03X: %02X %02X %02X %02X %02X %02X %02X %02X",
                      msg.identifier,
                      msg.data[0], msg.data[1], msg.data[2], msg.data[3],

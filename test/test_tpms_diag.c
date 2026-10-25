@@ -78,6 +78,50 @@ void test_single_frame_temps(void) {
     TEST_ASSERT_FALSE(v.valid[TPMS_DIAG_TIRE_SPARE]);  // not in this payload
 }
 
+void test_set2_pressures(void) {
+    // 61 15 + five pressures; raw 181 * 69 / 4000 - 0.5 = 2.6225 bar = 38.0 PSI
+    uint8_t payload[] = {0x61, 0x15, 0xB5, 0xB5, 0xB4, 0xB6, 0x00};
+    tpms_diag_values_t v;
+    uint8_t nrc = 0xFF;
+    TEST_ASSERT_TRUE(tpms_diag_decode_pressures(payload, sizeof(payload), &v, &nrc));
+    TEST_ASSERT_EQUAL_UINT8(0, nrc);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 38.04f, v.value[TPMS_DIAG_TIRE_FL]);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 38.29f, v.value[TPMS_DIAG_TIRE_RR]);  // raw 182
+    TEST_ASSERT_FALSE(v.valid[TPMS_DIAG_TIRE_SPARE]);
+}
+
+/*
+ * 62 10 05 + ten bytes, pressures in the odd ones, order FR, RR, FL, RL, spare.
+ * 16 bytes, so first frame + two consecutive frames.
+ */
+void test_uds_pressures_multi_frame(void) {
+    uint8_t ff[8] = {0x2A, 0x10, 0x0D, 0x62, 0x10, 0x05, 0x01, 0xBB};
+    uint8_t cf1[8] = {0x2A, 0x21, 0x02, 0xBC, 0x03, 0xBD, 0x04, 0xBE};
+    uint8_t cf2[8] = {0x2A, 0x22, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    TEST_ASSERT_EQUAL(TPMS_DIAG_RX_SEND_FC, tpms_diag_rx_feed(&rx, ff, 8));
+    TEST_ASSERT_EQUAL(TPMS_DIAG_RX_NONE, tpms_diag_rx_feed(&rx, cf1, 8));
+    TEST_ASSERT_EQUAL(TPMS_DIAG_RX_COMPLETE, tpms_diag_rx_feed(&rx, cf2, 8));
+
+    tpms_diag_values_t v;
+    TEST_ASSERT_TRUE(tpms_diag_decode_pressures(rx.payload, rx.received_len, &v, NULL));
+    // raw 187: 187 / 4.125 - 5.697 = 39.64 PSI
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 39.64f, v.value[TPMS_DIAG_TIRE_FR]);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 39.88f, v.value[TPMS_DIAG_TIRE_RR]);  // raw 188
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 40.12f, v.value[TPMS_DIAG_TIRE_FL]);  // raw 189
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 40.37f, v.value[TPMS_DIAG_TIRE_RL]);  // raw 190
+    TEST_ASSERT_FALSE(v.valid[TPMS_DIAG_TIRE_SPARE]);
+}
+
+void test_uds_negative_response(void) {
+    // 7F 22 31: requestOutOfRange
+    uint8_t payload[] = {0x7F, 0x22, 0x31};
+    tpms_diag_values_t v;
+    uint8_t nrc = 0;
+    TEST_ASSERT_FALSE(tpms_diag_decode_pressures(payload, sizeof(payload), &v, &nrc));
+    TEST_ASSERT_EQUAL_UINT8(0x31, nrc);
+}
+
 void test_wrong_pid_is_rejected(void) {
     uint8_t payload[] = {0x61, 0x16, 0x3C, 0x3C, 0x3C, 0x3C, 0x3C};
     tpms_diag_values_t v;
@@ -126,6 +170,9 @@ int main(void) {
     RUN_TEST(test_multi_frame_pressures);
     RUN_TEST(test_single_frame_negative_response);
     RUN_TEST(test_single_frame_temps);
+    RUN_TEST(test_set2_pressures);
+    RUN_TEST(test_uds_pressures_multi_frame);
+    RUN_TEST(test_uds_negative_response);
     RUN_TEST(test_wrong_pid_is_rejected);
     RUN_TEST(test_out_of_sequence_consecutive_frame);
     RUN_TEST(test_stray_consecutive_frame_is_ignored);

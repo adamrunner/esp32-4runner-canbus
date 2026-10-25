@@ -14,6 +14,10 @@
 #define PRESSURE_DIV     58.0f
 #define PRESSURE_ADD_BAR (-0.5f)
 #define TEMP_ADD_C       (-40.0f)
+#define SET2_MUL         69.0f
+#define SET2_DIV         4000.0f
+#define UDS_PSI_DIV      4.125f
+#define UDS_PSI_ADD      (-5.6969697f)
 
 void tpms_diag_build_request(uint8_t pid, uint8_t out[8])
 {
@@ -105,51 +109,99 @@ tpms_diag_rx_result_t tpms_diag_rx_feed(tpms_diag_rx_t *rx, const uint8_t *data,
     }
 }
 
-static bool decode_common(const uint8_t *payload, size_t len, uint8_t pid,
-                          tpms_diag_values_t *out, uint8_t *nrc)
+// Checks for a positive reply to `sid` whose identifier (1 or 2 bytes) matches
+// `id`. Returns the offset of the first data byte, or 0 if it does not match.
+static size_t decode_common(const uint8_t *payload, size_t len, uint8_t sid, uint16_t id,
+                            size_t id_len, tpms_diag_values_t *out, uint8_t *nrc)
 {
     if (nrc) {
         *nrc = 0;
     }
-    if (!payload || !out || len < 2) {
-        return false;
+    if (!payload || !out || len < 1 + id_len) {
+        return 0;
     }
     memset(out, 0, sizeof(*out));
     if (payload[0] == SID_NEGATIVE) {
-        if (nrc && len >= 3 && payload[1] == TPMS_DIAG_SID) {
+        if (nrc && len >= 3) {
             *nrc = payload[2];
         }
-        return false;
+        return 0;
     }
-    return payload[0] == TPMS_DIAG_SID + POSITIVE_OFFSET && payload[1] == pid;
+    if (payload[0] != sid + POSITIVE_OFFSET) {
+        return 0;
+    }
+    uint16_t got = id_len == 2 ? (uint16_t)((payload[1] << 8) | payload[2]) : payload[1];
+    return got == id ? 1 + id_len : 0;
+}
+
+// One raw byte per tire from `first`, `stride` bytes apart, in tire order `order`.
+static void decode_pressure_bytes(const uint8_t *payload, size_t len, size_t first,
+                                  size_t stride, const tpms_diag_tire_t order[],
+                                  float psi_per_raw, float psi_add, tpms_diag_values_t *out)
+{
+    for (size_t i = 0; i < TPMS_DIAG_TIRE_COUNT; i++) {
+        size_t pos = first + i * stride;
+        if (pos >= len) {
+            break;
+        }
+        uint8_t raw = payload[pos];
+        if (raw == 0) {
+            continue;  // OBDb nullmin: no reading for this wheel
+        }
+        out->value[order[i]] = raw * psi_per_raw + psi_add;
+        out->valid[order[i]] = true;
+    }
 }
 
 bool tpms_diag_decode_pressures(const uint8_t *payload, size_t len, tpms_diag_values_t *out,
                                 uint8_t *nrc)
 {
-    if (!decode_common(payload, len, TPMS_DIAG_PID_PRESSURE, out, nrc)) {
+    static const tpms_diag_tire_t kwp_order[TPMS_DIAG_TIRE_COUNT] = {
+        TPMS_DIAG_TIRE_FL, TPMS_DIAG_TIRE_FR, TPMS_DIAG_TIRE_RL, TPMS_DIAG_TIRE_RR,
+        TPMS_DIAG_TIRE_SPARE,
+    };
+    static const tpms_diag_tire_t uds_order[TPMS_DIAG_TIRE_COUNT] = {
+        TPMS_DIAG_TIRE_FR, TPMS_DIAG_TIRE_RR, TPMS_DIAG_TIRE_FL, TPMS_DIAG_TIRE_RL,
+        TPMS_DIAG_TIRE_SPARE,
+    };
+
+    size_t first = decode_common(payload, len, TPMS_DIAG_SID, TPMS_DIAG_PID_PRESSURE, 1,
+                                 out, nrc);
+    if (first) {
+        decode_pressure_bytes(payload, len, first, 1, kwp_order,
+                              PSI_PER_BAR / PRESSURE_DIV, PRESSURE_ADD_BAR * PSI_PER_BAR, out);
+        return true;
+    }
+    if (nrc && *nrc) {
         return false;
     }
-    for (size_t i = 0; i < TPMS_DIAG_TIRE_COUNT && 2 + i < len; i++) {
-        uint8_t raw = payload[2 + i];
-        if (raw == 0) {
-            continue;  // OBDb nullmin: no reading for this wheel
-        }
-        float bar = raw / PRESSURE_DIV + PRESSURE_ADD_BAR;
-        out->value[i] = bar * PSI_PER_BAR;
-        out->valid[i] = true;
+    first = decode_common(payload, len, TPMS_DIAG_SID, TPMS_DIAG_PID_PRESSURE_SET2, 1, out, nrc);
+    if (first) {
+        decode_pressure_bytes(payload, len, first, 1, kwp_order,
+                              PSI_PER_BAR * SET2_MUL / SET2_DIV, PRESSURE_ADD_BAR * PSI_PER_BAR,
+                              out);
+        return true;
     }
-    return true;
+    first = decode_common(payload, len, TPMS_DIAG_SID_UDS_READ, TPMS_DIAG_DID_PRESSURE, 2,
+                          out, nrc);
+    if (first) {
+        // Each pressure follows a byte OBDb leaves undecoded, so skip one ahead
+        decode_pressure_bytes(payload, len, first + 1, 2, uds_order, 1.0f / UDS_PSI_DIV,
+                              UDS_PSI_ADD, out);
+        return true;
+    }
+    return false;
 }
 
 bool tpms_diag_decode_temps(const uint8_t *payload, size_t len, tpms_diag_values_t *out,
                             uint8_t *nrc)
 {
-    if (!decode_common(payload, len, TPMS_DIAG_PID_TEMP, out, nrc)) {
+    size_t first = decode_common(payload, len, TPMS_DIAG_SID, TPMS_DIAG_PID_TEMP, 1, out, nrc);
+    if (!first) {
         return false;
     }
-    for (size_t i = 0; i < TPMS_DIAG_TIRE_COUNT && 2 + i < len; i++) {
-        uint8_t raw = payload[2 + i];
+    for (size_t i = 0; i < TPMS_DIAG_TIRE_COUNT && first + i < len; i++) {
+        uint8_t raw = payload[first + i];
         if (raw == 0) {
             continue;  // OBDb nullmin (-40 C)
         }

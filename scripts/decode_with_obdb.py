@@ -23,13 +23,15 @@ class OBDbDecoder:
         # Built-in passive broadcast definitions (listen-only, no OBD-II queries)
         # Names and formulas are calibrated from the analysis summary
         self.manual_can_ids = {
+            # Same decode as the firmware's handle_broadcast_wheel_speed(). Not TPMS: tire
+            # pressure is not on this bus (docs/TPMS_DECODING_NOTES.md).
             0x0AA: {
-                "name": "TPMS Pressure",
+                "name": "Wheel Speed",
                 "signals": [
-                    {"name": "FL Pressure", "bix": 0, "len": 16, "div": 30.0, "mul": 0.145038, "unit": "psi"},
-                    {"name": "FR Pressure", "bix": 16, "len": 16, "div": 30.0, "mul": 0.145038, "unit": "psi"},
-                    {"name": "RL Pressure", "bix": 32, "len": 16, "div": 30.0, "mul": 0.145038, "unit": "psi"},
-                    {"name": "RR Pressure", "bix": 48, "len": 16, "div": 30.0, "mul": 0.145038, "unit": "psi"},
+                    {"name": "FR Speed", "bix": 0, "len": 16, "sign": True, "add": -6770, "div": 100, "unit": "km/h"},
+                    {"name": "FL Speed", "bix": 16, "len": 16, "sign": True, "add": -6770, "div": 100, "unit": "km/h"},
+                    {"name": "RR Speed", "bix": 32, "len": 16, "sign": True, "add": -6770, "div": 100, "unit": "km/h"},
+                    {"name": "RL Speed", "bix": 48, "len": 16, "sign": True, "add": -6770, "div": 100, "unit": "km/h"},
                 ],
                 "source": "built-in",
             },
@@ -68,23 +70,8 @@ class OBDbDecoder:
                 ],
                 "source": "built-in",
             },
-            0x4A7: {
-                "name": "TPMS Temperature",
-                "signals": [
-                    {"name": "FL Temp", "bix": 0, "len": 8, "add": -40, "unit": "celsius"},
-                    {"name": "FR Temp", "bix": 8, "len": 8, "add": -40, "unit": "celsius"},
-                    {"name": "RL Temp", "bix": 16, "len": 8, "add": -40, "unit": "celsius"},
-                    {"name": "RR Temp", "bix": 24, "len": 8, "add": -40, "unit": "celsius"},
-                ],
-                "source": "built-in",
-            },
-            0x498: {
-                "name": "TPMS/Vehicle Data",
-                "signals": [
-                    {"name": "Rear Tire Pressure", "bix": 32, "len": 8, "mul": 1.583, "unit": "kPa"},
-                ],
-                "source": "built-in",
-            },
+            # 0x4A7 / 0x498 were once decoded as TPMS; correlation against RF ground truth
+            # shows neither tracks tire pressure (docs/TPMS_DECODING_NOTES.md)
         }
 
         self.obdb_can_ids = {}

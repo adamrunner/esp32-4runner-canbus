@@ -112,13 +112,12 @@ Advanced decoder that integrates Toyota 4Runner OBDb database for accurate signa
 - Loads signal definitions from Toyota 4Runner OBDb database
 - Decodes messages with proper scaling, offsets, and units
 - Currently decodes:
-  - 0x0AA - TPMS Pressure (psi, calibrated 16-bit pairs)
+  - 0x0AA - Wheel Speed (km/h, FR/FL/RR/RL, same formula as the firmware)
   - 0x0B4 - Vehicle Speed (km/h)
   - 0x1AA - Steering Angle (degrees)
   - 0x1C4 - Throttle Position (%)
   - 0x1D0 - Engine RPM (rpm)
   - 0x2C1 - Engine Coolant Temperature (°C)
-  - 0x4A7 - TPMS Temperature (°C, OBDb format)
   - OBDb `rax` IDs - any response IDs present in `default.json`
 - Shows value ranges (min/max/avg) for signals
 - Exports decoded data to CSV with proper units
@@ -189,6 +188,48 @@ Searches for and decodes Tire Pressure Monitoring System (TPMS) messages.
 - To analyze TPMS data patterns
 
 **Note:** The decoder provides multiple interpretations (8-bit and 16-bit) since the exact format needs calibration against known tire pressures.
+
+**Legacy:** its 0x4A7 decode is not tire pressure, and none of these IDs carry
+TPMS on this truck. Use `tpms_correlate.py` with RF ground truth instead.
+
+---
+
+### tpms_rf_record.py - RF Receiver Recorder
+Polls the `esp32-4runner-tpms` receiver's `/api/state` and appends every
+snapshot, stamped with the laptop's clock, to a JSONL file. Prints each new
+report from a mapped wheel. Stop with Ctrl-C.
+
+```bash
+./scripts/tpms_rf_record.py logs/rf_20261025.jsonl
+./scripts/tpms_rf_record.py logs/rf.jsonl --url http://tpms.local --interval 5
+```
+
+---
+
+### tpms_correlate.py - CAN vs RF Correlator
+Tries every byte and every adjacent 16-bit pair (BE and LE) of every CAN ID in
+a `.bin` log against each wheel's RF pressure. Ranks by `r_step`, the
+correlation of 10 s changes, and also shows `r` (levels), the best lag within
+`--max-lag`, and the fitted counts/PSI.
+
+```bash
+./scripts/tpms_correlate.py logs/CAN_20261025_121704.bin logs/rf_20261025.jsonl --clock-offset 31204.5
+./scripts/tpms_correlate.py CAN.bin rf.jsonl --clock-offset 31204.5 --wheel FL --top 30
+```
+
+**Test procedure:** start SD logging and `tpms_rf_record.py`, change one tire's
+pressure by several PSI two or three times (hold each ~2 min; check
+`tpms.local` shows the wheel reporting), stop both, run the correlator.
+
+**`--clock-offset`** = laptop time - RTC time, plus your UTC offset (the
+firmware stores the RTC's local time in the `.bin` header as if it were UTC).
+2026-10-25: 6004.5 + 25200 = 31204.5. The script exits with the gap in hours
+if the two logs do not overlap.
+
+**Reading results:** a real signal has `r_step` and `r` both near ±1, a
+plausible scale (OBDb's TPMS scale is ~4 counts/PSI) and a lag well inside
+`--max-lag`. High `r` with low `r_step` is a slow drift (e.g. a temperature)
+that happens to follow the test's shape.
 
 ---
 

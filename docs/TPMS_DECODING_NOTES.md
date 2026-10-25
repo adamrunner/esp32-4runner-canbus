@@ -1,9 +1,151 @@
 # TPMS Decoding Notes - Toyota 4Runner
 
-## Status (2026-10-24): passive decode not confirmed; active probe added
+## Status (2026-10-25): TPMS is not on the DLC3 CAN bus
 
-The passive "decode" below rests on a single calibration point (all four tires
-at 38 PSI) and does not hold up against the drive logs:
+On this 2018 4Runner, tire pressure is not available from the OBD port's CAN
+bus, either on request or as a broadcast:
+
+1. **No ECU at OBDb's TPMS address.** Nothing answers at `0x750` ext `2A`, not
+   even tester present, while other ECUs on the same bus do.
+2. **No other diagnostic sub-ECU carries it.** Only `0x40` (main body ECU) and
+   `0xDC` answer behind `0x750`; `0xDC` did not react to a deflated tire.
+3. **No broadcast carries it.** Over a 14-minute capture in which FL swung
+   between 22.7 and 35.2 PSI (RF receiver as ground truth), no CAN signal
+   tracked the pressure.
+4. **The TPMS lamp is not on this bus either.** The dash TPMS lamp came on when
+   FL went below ~25 PSI, but no bit on the bus changed at those crossings.
+   The TPMS ECU reaches the cluster by some other path (another bus or a
+   direct line), which also explains (1)-(3).
+
+The `esp32-4runner-tpms` RF receiver (CC1101, 315 MHz) is the source for tire
+pressures. The longer-term plan is a separate project CAN network, with a
+gateway bridging selected vehicle-CAN data onto it and the RF receiver as
+another node there.
+
+Not yet tried:
+
+- **Plain 11-bit request IDs `0x700-0x7F7`.** Only the extended addresses
+  behind `0x750` have been swept. Skip IDs already seen on the bus (`0x770`,
+  `0x7C6`, `0x7CE` appear unprompted) to avoid colliding with real traffic.
+  Less likely to pay off given (3) and (4).
+- **K-line on DLC3 pin 7.** OBDb's 2003-2009 4Runner TPMS entry is KWP on
+  K-line (header `81 2A`, 9600 baud), and `2A` is the same address OBDb gives
+  for CAN. Check pin 7 for ~12 V idle with the ignition on; if present, try
+  `21 30` there with a K-line transceiver (L9637D, SI9241) on a spare UART.
+
+## Truck and tools
+
+- 2018 4Runner, 2018 cluster (warning lamp only, no per-wheel display).
+- Sensors: PMV-107J at 315 MHz. Mapped IDs FL `01069354`, FR `0101e011`,
+  RL `072e7108`, RR `0739510d`; nearby `0241xx31` IDs belong to other cars.
+- Lamp threshold: on below ~25 PSI (observed on FL; placard 32 PSI).
+- RF receiver: `http://tpms.local`, JSON state at `/api/state` (`sensors[]`
+  with `id`, `pos`, `psi`, `temp_c`, `age_s`, `count`; `map` of wheel -> ID).
+  While a tire's pressure is changing, its sensor reports about every 15 s.
+- `scripts/tpms_rf_record.py`: records `/api/state` to JSONL with laptop time.
+- `scripts/tpms_correlate.py`: correlates every byte / 16-bit pair of a CAN
+  `.bin` log with the recorded RF pressures (`r` on levels, `r_step` on 10 s
+  changes, ranked by `r_step`; see the next section for why).
+- Firmware (`main/4runner_canbus_main.cpp`), all off by default:
+  `k_tpms_sweep_on_boot` (0x750 address sweep, TPMS PID probe of each
+  responder, then `21 00-FF` on `0xDC`) and `k_ecu_ident_on_boot` (KWP `1A`).
+  Replies from any `0x750` sub-ECU are logged in full as `Sub-ECU 0xNN reply`,
+  and any unrecognized `0x7xx` frame as `Unhandled 0xNNN`.
+
+## Clock alignment for .bin logs
+
+The board's RTC drifts: on 2026-10-25 it was 6004.5 s behind the laptop
+(boot log printed `Current RTC time: 12:12:58` at laptop 13:53:02.5).
+Separately, the firmware stores the RTC's local time in the `.bin` header as
+if it were UTC, so header times are off by the time-zone offset as well. For
+`tpms_correlate.py --clock-offset`, add both: 6004.5 + 25200 (UTC-7) =
+31204.5. The script reports when the CAN and RF times do not overlap.
+
+## Correlation method: why `r_step`
+
+Level correlation alone gives false positives: on a real drive log with a
+made-up deflate/inflate profile (no pressure data in it at all), slowly
+drifting signals such as the `0x3BB` coolant-temperature candidate reached
+|r| = 0.94. Correlating changes over 10 s windows separates them: the same
+test peaked at `r_step` 0.34, while a planted pressure byte scored 1.000 with
+the expected 4.0 counts/PSI. A real pressure signal needs both high.
+
+## Evidence
+
+### 2018: no ECU at 0x750 / 2A
+
+OBDb's 4Runner signal set lists these at `0x750` ext `2A`, reply `0x758`:
+
+| Request | Meaning (OBDb) |
+|---|---|
+| `21 30` | FL, FR, RL, RR, spare: bar = raw / 58 - 0.5 (0 = no data); lists 2018 |
+| `21 15` | "set 2" pressures, bar = raw * 69 / 4000 - 0.5; all years |
+| `21 16` | temperatures, C = raw - 40; 2020+ |
+| `22 1005` | FR, RR, FL, RL, spare, PSI = raw / 4.125 - 5.697; 2026+ |
+
+`components/tpms_diag` implements framing (extended addressing, ISO-TP flow
+control and reassembly) and decoders for all four, host-tested.
+
+Engine running, 2026-10-25: no reply to `3E 00`, `21 30`, `21 15`, `22 1005`
+or `21 16` at ext `2A` (95 requests in 60 s, `tx_fail=0`), while the meter at
+`0x7C0` answered all 19 of its polls. No unrecognized `0x7xx` frames either.
+
+### 0x750 address sweep
+
+Tester present (`3E 00`) to all 256 extended addresses found two sub-ECUs,
+both answering `7F 3E 12` (they want a different tester-present form; any
+diagnostic ECU at `2A` would have answered the same way). Byte 0 of each reply
+is the responder's address.
+
+| Ext | 21 30 | 21 15 | 22 1005 | 21 16 | 1A 81 |
+|---|---|---|---|---|---|
+| `0x40` | NRC 12 | `61 15 30 00 40 00` | NRC 11 | NRC 12 | "35240" |
+| `0xDC` | NRC 12 | NRC 12 | NRC 11 | NRC 12 | "35010" |
+
+NRC 12 = sub-function/PID not supported, NRC 11 = service not supported (no
+UDS). `0x40` is the main body ECU by Toyota convention; its `21 15` is body
+data that shares the PID number. KWP `1A 80-9F`: each answers only `1A 81`
+(the reply does not echo the option byte), NRC 12 to the rest. Neither code
+is a Toyota TPMS part number (89769-xxxxx).
+
+### 0xDC is not the TPMS ECU
+
+`21 00/20/.../E0` return supported-PID bitmaps (as in OBD mode 01): `0xDC`
+supports `21 03, 05, 07, 08, E1, E2`. Polled every ~3 s for 10 minutes while
+FL went 30.2 -> 28.4 PSI: nothing moved in the 7.5 minutes after the drop.
+
+| PID | Contents |
+|---|---|
+| `08` | Supply voltage, 0.1 V/count (`8B` = 13.9 V, matches a battery voltmeter; flickers `8A`/`8B`) |
+| `E1` | `00 36 90 00 xx xx`: last two bytes a free-running 100 ms counter that survives our reboots |
+| `03` | `00 00` |
+| `05` | `80 00 00` |
+| `07` | 18 bytes, all zero (multi-frame; needs ~250 ms before the next request to `0xDC`) |
+| `E2` | `00 3E 99 01 00` |
+
+### Passive correlation against RF ground truth
+
+`CAN_20261025_121704.bin` (933k frames, 13:57-14:11) alongside
+`tpms_rf_record.py`. FL, engine running:
+28.8 -> 35.2 -> 24.5 -> 34.9 -> 22.7 -> 34.2 PSI, 24 reports. Lamp came on
+below ~25 PSI: first crossing at 14:02:20 (24.5), back above at 14:02:51
+(26.3), below again at 14:05:26 (22.7).
+
+- `tpms_correlate.py`: best `r_step` 0.58 (`0x3B1` b3, `0x620` b2, `0x639` b2)
+  with `r` <= 0.24. All three are flags that change only at the start
+  (13:57-13:58) and end (14:10:3x) of the session, not at the swings.
+- Bit-level scan for the lamp: no quiet bit changes near both sub-25 PSI
+  crossings. Bits that do are counters or busy signals (`0x2C1`, `0x3D3`,
+  `0x49E` b1, `0x4A7` b3, `0x63B` b6 on a ~25 s/51 s/3.4 min cycle).
+- `0x49D` b0 / `0x498` b4.5 pulse for ~2 s at 13:59:27, 14:00:07, 14:02:47,
+  14:03:44 and 14:05:44. Three line up with FL reports, but about 20 FL
+  reports have no pulse and two pulses have no report, so they are not
+  "packet received" events.
+
+### Earlier passive decode (2026-10-24): not supported
+
+The original passive "decode" below rests on a single calibration point (all
+four tires at 38 PSI) and does not hold up against the drive logs:
 
 - `0x4A7` bytes 0/1 jump by 20+ counts (~4.6 PSI at the claimed scale) between
   consecutive frames 97 times in one 15-minute drive (`CAN_20260102_123449`),
@@ -14,27 +156,8 @@ at 38 PSI) and does not hold up against the drive logs:
 - `0x49E` byte 0 is also a constant 166, so "byte near 166 at 38 PSI" does not
   single anything out. `0x498` byte 4 drifts *down* over drives as tires warm.
 
-Treat `0x4A7`/`0x498` as unidentified. The 2018 cluster shows only a TPMS
-warning lamp, so the TPMS ECU may never broadcast per-wheel pressures.
-
-**Active probe.** The firmware now polls the TPMS ECU the way OBDb's 4Runner
-signal set does (`components/tpms_diag`):
-
-| Request | Reply | Meaning |
-|---|---|---|
-| `0x750` `2A 02 21 30` | `0x758` `2A 10 07 61 30 ...` | FL, FR, RL, RR, spare: bar = raw / 58 - 0.5 (0 = no data) |
-| `0x750` `2A 02 21 16` | `0x758` | same order, C = raw - 40 (OBDb lists 2020+ only) |
-
-The pressure reply is 7 bytes, too long for one extended-address frame, so
-the firmware answers the first frame with flow control (`0x750` `2A 30 00 00`)
-and reassembles the consecutive frame. Every `0x758` frame is logged
-(`TPMS RX: ...`), decoded values as `TPMS PSI ...`, negative responses as
-`NRC 0xNN`; the 4Runner page shows a "Tires (PSI)" card. The CAN logger
-records the `0x758` replies; our own requests and flow control are TX-only
-and do not appear in the SD logs.
-
-To validate: run the `esp32-4runner-tpms` RF receiver (known sensor IDs and
-positions) at the same time, ignition on, then change one tire's pressure.
+The 2026-10-25 correlation confirms it: none of `0x4A7`, `0x498` or `0x49E`
+track FL pressure.
 
 ---
 

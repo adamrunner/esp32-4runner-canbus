@@ -64,6 +64,18 @@ else:
     # RTC was not valid at log start; no wall-clock available
 ```
 
+**Caveats when lining logs up with another clock:**
+- The RTC holds local wall time, and `can_logger.c` converts it with
+  `mktime()` with no `TZ` set, i.e. as if it were UTC. `log_start_unix_us` is
+  therefore off from true Unix time by your UTC offset (7 h early in PDT).
+  `bin_to_csv.py`'s `datetime` column (`fromtimestamp`, laptop's local zone)
+  inherits the same shift: a log started at 12:17 RTC time shows 05:17.
+- The RTC also drifts: on 2026-10-25 it was 6004.5 s behind the laptop.
+  Measure it by noting the laptop clock when the boot log prints
+  `rtc: Current RTC time: ...`.
+
+`scripts/tpms_correlate.py --clock-offset` takes the sum of both terms.
+
 ### File Naming
 
 Binary log files use the extension `.bin` and follow the pattern:

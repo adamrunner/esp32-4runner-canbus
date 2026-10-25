@@ -21,7 +21,7 @@ This project uses an ESP32-S3 microcontroller to passively listen to the CAN bus
 - ✅ Comprehensive Python analysis tools
 - ✅ OBDb-integrated decoder for accurate signal interpretation
 - ✅ DBC-based signal decoding with cantools
-- ✅ TPMS (Tire Pressure Monitoring System) decoding
+- ❌ TPMS: not on this truck's OBD-port CAN bus; see [TPMS_DECODING_NOTES.md](TPMS_DECODING_NOTES.md)
 - ✅ Real-time kinematics decoding (yaw rate, lateral G, steering angle)
 - ✅ Vehicle speed, RPM, throttle, and more
 
@@ -69,8 +69,8 @@ python analysis/dbc_decode.py logs/CAN_20260104_143052.csv --dbc toyota_4runner.
 ### 4. View Specific Data
 
 ```bash
-# Check TPMS (tire pressure & temperature)
-./scripts/decode_with_obdb.py logs/CAN_20260104_143052.csv --id 0x4A7
+# Check wheel speeds
+./scripts/decode_with_obdb.py logs/CAN_20260104_143052.csv --id 0x0AA
 
 # Check engine RPM
 ./scripts/decode_with_obdb.py logs/CAN_20260104_143052.csv --id 0x1D0
@@ -87,7 +87,9 @@ python analysis/dbc_decode.py logs/CAN_20260104_143052.csv --dbc toyota_4runner.
 | **analysis/dbc_decode.py** | DBC signal decoder | Decoding with manufacturer DBC files |
 | **scripts/decode_with_obdb.py** ⭐ | OBDb-integrated decoder | Getting accurate physical values (PSI, °C, RPM, etc.) |
 | **scripts/validate_can.py** | Message validation | Checking capture quality and statistics |
-| **scripts/find_tpms.py** | TPMS message finder | Searching for tire pressure data |
+| **scripts/find_tpms.py** | TPMS message finder (legacy) | Superseded by tpms_correlate.py |
+| **scripts/tpms_rf_record.py** | RF receiver recorder | Logging `tpms.local` pressures as ground truth |
+| **scripts/tpms_correlate.py** | CAN vs RF correlator | Finding CAN signals that track a measured quantity |
 | **scripts/decode_can.py** | Pattern analyzer | Analyzing unknown CAN IDs |
 
 See [SCRIPTS_USAGE.md](SCRIPTS_USAGE.md) and [BINARY_LOGGING.md](BINARY_LOGGING.md) for detailed documentation.
@@ -100,7 +102,7 @@ See [SCRIPTS_USAGE.md](SCRIPTS_USAGE.md) and [BINARY_LOGGING.md](BINARY_LOGGING.
 |--------|-------------|---------|
 | 0x024 | Kinematics | Yaw rate (deg/s), Steering torque, Lateral G |
 | 0x025 | Steering Sensor | Steering angle (degrees) |
-| 0x0AA | TPMS Pressure | FL, FR, RL, RR tire pressure (psi) |
+| 0x0AA | Wheel Speed | FR, FL, RR, RL (km/h), (raw - 6770) / 100 |
 | 0x0B4 | Vehicle Speed | Speed (km/h) |
 | 0x1C4 | Throttle | Throttle position (%) |
 | 0x1D0 | Engine | RPM (rpm) |
@@ -111,27 +113,24 @@ See [SCRIPTS_USAGE.md](SCRIPTS_USAGE.md) and [BINARY_LOGGING.md](BINARY_LOGGING.
 | CAN ID | Description | Signals |
 |--------|-------------|---------|
 | 0x7B8 | ABS Module | Lateral G, Yaw rate, Steering angle (PID 0x47) |
+| 0x7C8 | Combination meter | Fuel level (21 29) |
+| 0x758 (ext 0xDC) | 0x750 sub-ECU | Supply voltage, 0.1 V/count (21 08; not polled by default) |
 | 0x7E8 | ECU | RPM, Speed, Throttle, Temps, Battery voltage |
 | OBDb RAX IDs | OBDb derived | Any response IDs defined in `default.json` |
 
 ## Example Output
 
 ```bash
-$ ./scripts/decode_with_obdb.py logs/can_capture_20251212_164502.log --id 0x0AA
+$ ./scripts/tpms_correlate.py logs/CAN_20261025_121704.bin logs/rf_20261025.jsonl --clock-offset 31204.5
 
-📡 DETAILED DECODE: 0x0AA
-============================================================
-Total messages: 2689
-Name: TPMS Pressure
-
-📝 Sample Decoded Messages:
-  FL Pressure: 32.72 psi   FR Pressure: 32.72 psi
-  RL Pressure: 32.72 psi   RR Pressure: 32.72 psi
-
-📈 Value Ranges:
-  FL Pressure: min=30.94  max=43.85  avg=36.41
-  FR Pressure: min=30.40  max=43.96  avg=36.43
+    ID signal     wheel  r_step       r  lag s  bins     raw range counts/PSI
+0x3B1 b3         FL      0.584   0.150      4   345      1-5            0.01
+0x620 b2         FL     -0.576  -0.137     18   345      0-1           -0.00
+...
 ```
+
+(No signal tracks pressure here: a real one would have `r_step` and `r` both
+near ±1. See [TPMS_DECODING_NOTES.md](TPMS_DECODING_NOTES.md).)
 
 ## File Structure
 
@@ -154,7 +153,9 @@ Name: TPMS Pressure
 ├── scripts/                     # Python analysis tools
 │   ├── decode_with_obdb.py      # ⭐ OBDb-integrated decoder
 │   ├── validate_can.py          # CAN validation
-│   ├── find_tpms.py             # TPMS finder
+│   ├── find_tpms.py             # TPMS finder (legacy)
+│   ├── tpms_rf_record.py        # Record RF receiver pressures
+│   ├── tpms_correlate.py        # Correlate CAN signals with RF pressures
 │   └── decode_can.py            # Pattern analyzer
 ├── capture_can.sh               # Capture helper
 ├── sanitize_logs.sh             # Log cleaning
@@ -200,7 +201,7 @@ To use a different location:
 
 Contributions welcome! Areas of interest:
 - Adding more passive CAN ID decoders
-- Improving TPMS decoding accuracy
+- Finding where the TPMS ECU lives (K-line on DLC3 pin 7?)
 - Adding real-time plotting capabilities
 - Web interface for live monitoring
 

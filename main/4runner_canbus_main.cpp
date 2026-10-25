@@ -28,6 +28,7 @@
 #include "page_utils.h"
 #include "settings_store.h"
 #include "can_signal.h"
+#include "tpms_diag.h"
 #include "diag_page.h"
 #include "fourrunner_page.h"
 #include "wheel_speed_page.h"
@@ -164,6 +165,9 @@ static const obd_request_t k_request_sequence[] = {
     {ABS_REQUEST_ID, 0x21, 0x03, 0},
     {ABS_REQUEST_ID, 0x21, 0x46, 0},  // Orientation zero points
     {ABS_REQUEST_ID, 0x21, 0x47, 0},  // Orientation live data
+    // TPMS ECU (OBDb 4Runner signal set; unconfirmed on this truck, see tpms_diag.h)
+    {TPMS_DIAG_REQUEST_ID, TPMS_DIAG_SID, TPMS_DIAG_PID_PRESSURE, TPMS_DIAG_EXT_ADDR},
+    {TPMS_DIAG_REQUEST_ID, TPMS_DIAG_SID, TPMS_DIAG_PID_TEMP, TPMS_DIAG_EXT_ADDR},
 };
 
 // TWAI Configuration
@@ -574,6 +578,73 @@ static void handle_extended_response(const twai_message_t *msg)
     metrics_unlock();
 }
 
+// TPMS ECU replies on 0x758 with extended addressing. Only the RX task calls
+// this, so the reassembly state needs no lock.
+static void handle_tpms_diag_frame(const twai_message_t *msg)
+{
+    static tpms_diag_rx_t s_tpms_rx;
+
+    ESP_LOGI(TAG, "TPMS RX: %02X %02X %02X %02X %02X %02X %02X %02X",
+             msg->data[0], msg->data[1], msg->data[2], msg->data[3],
+             msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
+
+    tpms_diag_rx_result_t res = tpms_diag_rx_feed(&s_tpms_rx, msg->data, msg->data_length_code);
+    if (res == TPMS_DIAG_RX_SEND_FC) {
+        twai_message_t fc = {};
+        fc.identifier = TPMS_DIAG_REQUEST_ID;
+        fc.data_length_code = 8;
+        tpms_diag_build_flow_control(fc.data);
+        esp_err_t err = twai_transmit(&fc, pdMS_TO_TICKS(10));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "TPMS flow control failed: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+    if (res == TPMS_DIAG_RX_ERROR) {
+        ESP_LOGW(TAG, "TPMS ISO-TP framing error; reassembly reset");
+        return;
+    }
+    if (res != TPMS_DIAG_RX_COMPLETE) {
+        return;
+    }
+
+    tpms_diag_values_t values = {};
+    uint8_t nrc = 0;
+    bool is_pressure = tpms_diag_decode_pressures(s_tpms_rx.payload, s_tpms_rx.received_len,
+                                                  &values, &nrc);
+    bool is_temp = !is_pressure &&
+        tpms_diag_decode_temps(s_tpms_rx.payload, s_tpms_rx.received_len, &values, &nrc);
+
+    metrics_lock();
+    can_metrics_t *m = metrics_get_for_update();
+    m->tpms_responses++;
+    if (nrc) {
+        m->tpms_last_nrc = nrc;
+    }
+    for (int i = 0; i < TPMS_DIAG_TIRE_COUNT; i++) {
+        if (is_pressure) {
+            m->tpms_psi[i] = values.value[i];
+            m->tpms_psi_valid[i] = values.valid[i];
+        } else if (is_temp) {
+            m->tpms_temp_c[i] = values.value[i];
+            m->tpms_temp_valid[i] = values.valid[i];
+        }
+    }
+    metrics_unlock();
+
+    if (nrc) {
+        ESP_LOGW(TAG, "TPMS negative response, NRC 0x%02X", nrc);
+    } else if (is_pressure || is_temp) {
+        ESP_LOGI(TAG, "TPMS %s FL=%.1f FR=%.1f RL=%.1f RR=%.1f spare=%.1f (%s)",
+                 is_pressure ? "PSI" : "C",
+                 values.value[0], values.value[1], values.value[2], values.value[3],
+                 values.value[4], is_pressure ? "21 30" : "21 16");
+    } else {
+        ESP_LOGW(TAG, "TPMS unrecognized payload, %u bytes, starts %02X %02X",
+                 (unsigned)s_tpms_rx.received_len, s_tpms_rx.payload[0], s_tpms_rx.payload[1]);
+    }
+}
+
 static void process_obd_response(const twai_message_t *msg)
 {
     if (!msg) {
@@ -617,6 +688,11 @@ static void process_obd_response(const twai_message_t *msg)
 
     if (msg->identifier == GEAR_BROADCAST_ID_025) {
         handle_broadcast_candidate_025(msg);
+        return;
+    }
+
+    if (msg->identifier == TPMS_DIAG_RESPONSE_ID) {
+        handle_tpms_diag_frame(msg);
         return;
     }
 

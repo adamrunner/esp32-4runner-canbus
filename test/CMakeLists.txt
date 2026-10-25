@@ -33,6 +33,23 @@ target_link_libraries(test_can_signal
     unity
 )
 
+# TPMS diagnostic probe library under test
+add_library(tpms_diag STATIC
+    ../components/tpms_diag/src/tpms_diag.c
+)
+target_include_directories(tpms_diag PUBLIC
+    ../components/tpms_diag/include
+)
+
+add_executable(test_tpms_diag
+    test_tpms_diag.c
+)
+target_link_libraries(test_tpms_diag
+    tpms_diag
+    unity
+)
+
 # Enable CTest
 enable_testing()
 add_test(NAME can_signal_tests COMMAND test_can_signal)
+add_test(NAME tpms_diag_tests COMMAND test_tpms_diag)

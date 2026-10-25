@@ -21,6 +21,7 @@ typedef struct {
     lv_obj_t *gear_value;
     lv_obj_t *fuel_value;
     lv_obj_t *odo_value;
+    lv_obj_t *tpms_value;
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
     lv_obj_t *can_toggle_label;
@@ -72,6 +73,9 @@ static void fourrunner_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "Odometer (km)", &data->odo_value);
+    lv_obj_set_size(card, LV_PCT(23), 110);
+
+    card = create_metric_card(grid, "Tires (PSI)", &data->tpms_value);
     lv_obj_set_size(card, LV_PCT(23), 110);
 
     create_nav_bar(page->container, &data->can_toggle_label);
@@ -164,6 +168,22 @@ static void fourrunner_page_on_update(dm_page_t *page)
         snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(data->odo_value, buf);
+
+    // FL FR / RL RR, as seen from the driver's seat
+    if (snap.tpms_last_nrc && !snap.tpms_psi_valid[0] && !snap.tpms_psi_valid[1]) {
+        snprintf(buf, sizeof(buf), "NRC %02X", snap.tpms_last_nrc);
+    } else {
+        char t[4][8];
+        for (int i = 0; i < 4; i++) {
+            if (snap.tpms_psi_valid[i]) {
+                snprintf(t[i], sizeof(t[i]), "%.1f", snap.tpms_psi[i]);
+            } else {
+                snprintf(t[i], sizeof(t[i]), "--");
+            }
+        }
+        snprintf(buf, sizeof(buf), "%s %s\n%s %s", t[0], t[1], t[2], t[3]);
+    }
+    lv_label_set_text(data->tpms_value, buf);
 
     update_page_counter(data->page_counter, data->page_index);
 }

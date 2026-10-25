@@ -1,8 +1,46 @@
 # TPMS Decoding Notes - Toyota 4Runner
 
-## Summary
+## Status (2026-10-24): passive decode not confirmed; active probe added
 
-Successfully decoded **3 of 4** tire pressure sensors from passive CAN bus broadcast messages.
+The passive "decode" below rests on a single calibration point (all four tires
+at 38 PSI) and does not hold up against the drive logs:
+
+- `0x4A7` bytes 0/1 jump by 20+ counts (~4.6 PSI at the claimed scale) between
+  consecutive frames 97 times in one 15-minute drive (`CAN_20260102_123449`),
+  range 36-255, and hit 255 at the end. Real TPMS values change slowly and
+  step at most about once a minute (the sensor transmit interval).
+- Bytes 4/5 move in lockstep with bytes 0/1 (e.g. 197/213 -> 142/144), which
+  looks like a dynamic left/right pair, not tire pressure.
+- `0x49E` byte 0 is also a constant 166, so "byte near 166 at 38 PSI" does not
+  single anything out. `0x498` byte 4 drifts *down* over drives as tires warm.
+
+Treat `0x4A7`/`0x498` as unidentified. The 2018 cluster shows only a TPMS
+warning lamp, so the TPMS ECU may never broadcast per-wheel pressures.
+
+**Active probe.** The firmware now polls the TPMS ECU the way OBDb's 4Runner
+signal set does (`components/tpms_diag`):
+
+| Request | Reply | Meaning |
+|---|---|---|
+| `0x750` `2A 02 21 30` | `0x758` `2A 10 07 61 30 ...` | FL, FR, RL, RR, spare: bar = raw / 58 - 0.5 (0 = no data) |
+| `0x750` `2A 02 21 16` | `0x758` | same order, C = raw - 40 (OBDb lists 2020+ only) |
+
+The pressure reply is 7 bytes, too long for one extended-address frame, so
+the firmware answers the first frame with flow control (`0x750` `2A 30 00 00`)
+and reassembles the consecutive frame. Every `0x758` frame is logged
+(`TPMS RX: ...`), decoded values as `TPMS PSI ...`, negative responses as
+`NRC 0xNN`; the 4Runner page shows a "Tires (PSI)" card. The CAN logger
+records the `0x758` replies; our own requests and flow control are TX-only
+and do not appear in the SD logs.
+
+To validate: run the `esp32-4runner-tpms` RF receiver (known sensor IDs and
+positions) at the same time, ignition on, then change one tire's pressure.
+
+---
+
+## Original notes (December 2024)
+
+Originally believed to decode **3 of 4** tire pressure sensors from passive CAN bus broadcast messages.
 
 **Calibration Date:** December 12, 2024
 **Known Tire Pressure:** 38 PSI (all 4 tires)

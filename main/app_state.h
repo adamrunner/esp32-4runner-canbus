@@ -104,6 +104,13 @@ typedef struct {
     bool bcast_wheel_speed_valid;
     bool diag_vehicle_speed_valid;
     bool bcast_vehicle_speed_valid;
+    // TPMS ECU diagnostic probe (0x750/0x758, ext 0x2A): FL, FR, RL, RR, spare
+    float tpms_psi[5];
+    float tpms_temp_c[5];
+    bool tpms_psi_valid[5];
+    bool tpms_temp_valid[5];
+    uint32_t tpms_responses;  // complete replies, positive or negative
+    uint8_t tpms_last_nrc;    // last negative response code, 0 = none
 } can_metrics_t;
 
 // CAN bus state (paused, error, etc.)

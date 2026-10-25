@@ -17,6 +17,7 @@ make
 echo ""
 echo "=== Running unit tests ==="
 ./test_can_signal
+./test_tpms_diag
 
 echo ""
 echo "=== All tests passed ==="

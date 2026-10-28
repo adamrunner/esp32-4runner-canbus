@@ -63,7 +63,7 @@ See [BINARY_LOGGING.md](BINARY_LOGGING.md) for format details and advanced usage
 ./scripts/decode_with_obdb.py logs/CAN_20260104_143052.csv
 
 # Or decode using DBC files
-python analysis/dbc_decode.py logs/CAN_20260104_143052.csv --dbc toyota_4runner.dbc
+python analysis/dbc_decode.py logs/CAN_20260104_143052.csv --dbc dbc/toyota_4runner_2018.dbc
 ```
 
 ### 4. View Specific Data
@@ -72,8 +72,8 @@ python analysis/dbc_decode.py logs/CAN_20260104_143052.csv --dbc toyota_4runner.
 # Check wheel speeds
 ./scripts/decode_with_obdb.py logs/CAN_20260104_143052.csv --id 0x0AA
 
-# Check engine RPM
-./scripts/decode_with_obdb.py logs/CAN_20260104_143052.csv --id 0x1D0
+# Check engine RPM (0x1C4, from the project DBC)
+python analysis/dbc_decode.py logs/CAN_20260104_143052.csv --dbc dbc/toyota_4runner_2018.dbc --ids 0x1C4
 
 # Export all decoded data to CSV
 ./scripts/decode_with_obdb.py logs/CAN_20260104_143052.csv --export
@@ -84,7 +84,12 @@ python analysis/dbc_decode.py logs/CAN_20260104_143052.csv --dbc toyota_4runner.
 | Script | Purpose | Best For |
 |--------|---------|----------|
 | **analysis/bin_to_csv.py** | Binary log converter | Converting SD card logs to CSV |
-| **analysis/dbc_decode.py** | DBC signal decoder | Decoding with manufacturer DBC files |
+| **analysis/bin_to_candump.py** | candump log converter | Opening logs in CANExplorer, SavvyCAN, can-utils |
+| **analysis/dbc_decode.py** | DBC signal decoder | Decoding with `dbc/toyota_4runner_2018.dbc` |
+| **analysis/cx_fields.py** | CANExplorer field analysis | Checksums, counters, fields per ID, per log |
+| **analysis/cx_consensus.py** | Cross-log field summary | Fields seen in most logs, matched to reference DBCs |
+| **analysis/cx_obdref.py** | OBD reference matching | Finding the broadcast that carries a polled PID |
+| **analysis/cx_markers.py** | Event marker search | Finding bits that change at moments you noted |
 | **scripts/decode_with_obdb.py** ⭐ | OBDb-integrated decoder | Getting accurate physical values (PSI, °C, RPM, etc.) |
 | **scripts/validate_can.py** | Message validation | Checking capture quality and statistics |
 | **scripts/find_tpms.py** | TPMS message finder (legacy) | Superseded by tpms_correlate.py |
@@ -96,17 +101,25 @@ See [SCRIPTS_USAGE.md](SCRIPTS_USAGE.md) and [BINARY_LOGGING.md](BINARY_LOGGING.
 
 ## Currently Decoded Signals
 
-### Broadcast Messages (Real-time on device)
+### Broadcast Messages
 
-| CAN ID | Description | Signals |
-|--------|-------------|---------|
-| 0x024 | Kinematics | Yaw rate (deg/s), Steering torque, Lateral G |
-| 0x025 | Steering Sensor | Steering angle (degrees) |
-| 0x0AA | Wheel Speed | FR, FL, RR, RL (km/h), (raw - 6770) / 100 |
-| 0x0B4 | Vehicle Speed | Speed (km/h) |
-| 0x1C4 | Throttle | Throttle position (%) |
-| 0x1D0 | Engine | RPM (rpm) |
-| 0x3BB | Engine Coolant (candidate) | ECT (C) from b2 (scaled) |
+[`dbc/toyota_4runner_2018.dbc`](../dbc/toyota_4runner_2018.dbc) is the source of truth;
+evidence and open candidates are in
+[`analysis/QUICK_REFERENCE.md`](../analysis/QUICK_REFERENCE.md).
+
+| CAN ID | Description | Signals | On device |
+|--------|-------------|---------|-----------|
+| 0x024 | Kinematics | Yaw rate (deg/s), Steering torque, Lateral G | Yes |
+| 0x025 | Steering Sensor | Steering angle (degrees) | Yes |
+| 0x0AA | Wheel Speed | FR, FL, RR, RL (km/h), (raw - 6767) / 100 | Yes (6770) |
+| 0x0B4 | Vehicle Speed | Speed (km/h), bytes 5-6 / 100 | Yes |
+| 0x1C4 | Engine | RPM, bytes 0-1 * 25/32 | Yes |
+| 0x224 | Brake | Brake pressed | No |
+| 0x2C1 | Gas Pedal | Gas released, pedal position | No (firmware reads byte 0 as ECT; it is a constant, -32 C) |
+| 0x361 | Engine | Throttle position (%) | No |
+| 0x3D0 | Vehicle Speed | Speed (km/h), byte 0 | No |
+| 0x498 | Engine | Coolant temp, byte 3 * 1.25 (C) | No (firmware shows 0x3BB b2 candidate) |
+| 0x49B | Engine | Intake air temp, byte 7 * 1.25 (C) | No |
 
 ### OBD/Diagnostic Responses
 
@@ -147,8 +160,12 @@ near ±1. See [TPMS_DECODING_NOTES.md](TPMS_DECODING_NOTES.md).)
 │   └── can_logger/              # Binary CAN logging component
 ├── analysis/                    # Binary log analysis tools
 │   ├── bin_to_csv.py            # Binary to CSV converter
+│   ├── bin_to_candump.py        # Binary/CSV to candump converter
 │   ├── dbc_decode.py            # DBC signal decoder
+│   ├── cx_*.py                  # CANExplorer-based analysis (fields, consensus, OBD refs, markers)
 │   └── decoded/                 # Decoded output (gitignored)
+├── dbc/
+│   └── toyota_4runner_2018.dbc  # Decoded broadcast signals
 ├── logs/                        # Captured CAN logs
 ├── scripts/                     # Python analysis tools
 │   ├── decode_with_obdb.py      # ⭐ OBDb-integrated decoder

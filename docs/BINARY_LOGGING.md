@@ -124,6 +124,38 @@ datetime,timestamp_us,can_id,dlc,b0,b1,b2,b3,b4,b5,b6,b7
 
 ---
 
+### bin_to_candump.py - Binary/CSV to candump Converter
+
+Converts logs to can-utils candump format (`(1761419837.123456) can0 3BB#00112233`),
+which CANExplorer, SavvyCAN, can-utils and python-can all read. Takes `.bin` logs,
+CSVs from older firmware (including the `byte0`-`byte7` layout of `LOG_0001.CSV`) and
+`bin_to_csv.py` output, or whole directories; in a directory, a CSV next to a `.bin`
+of the same name is skipped as a duplicate.
+
+**Usage:**
+```bash
+python analysis/bin_to_candump.py <input...> [-o out.log | -d out_dir] [--clock-offset S]
+```
+
+**Examples:**
+```bash
+# Every log on the SD card, into logs/candump/
+python analysis/bin_to_candump.py "/Volumes/NO NAME" -d logs/candump
+
+# One log, with RTC drift and the time-zone term corrected (see the caveats above)
+python analysis/bin_to_candump.py logs/CAN_20261025_121704.bin -o tpms.log --clock-offset 31204.5
+```
+
+- Timestamps are header time + monotonic offset, plus `--clock-offset`. Logs with no
+  valid RTC time start at 0. CSV logs take whole-second start times from their first
+  `datetime`.
+- The logger stores no extended-ID or RTR flag: IDs above `0x7FF` are written as
+  extended, and every frame as a data frame.
+
+**Requirements:** Python 3.6+ (standard library only)
+
+---
+
 ### dbc_decode.py - DBC Signal Decoder
 
 Decodes CAN messages using DBC database files and outputs signal values to CSV.
@@ -206,7 +238,7 @@ For signals defined in DBC files (e.g., from OBDb or manufacturer sources):
 
 ```bash
 python analysis/dbc_decode.py logs/CAN_20260104_143052.csv \
-    --dbc ~/Code/OBDb-Toyota-4Runner/dbc/toyota_4runner.dbc
+    --dbc dbc/toyota_4runner_2018.dbc
 ```
 
 ---

@@ -38,6 +38,31 @@ python analysis/bin_to_csv.py logs/CAN_20260104_143052.bin analysis/capture.csv
 
 **Requirements:** Python 3.6+ (standard library only)
 
+### bin_to_candump.py - candump Converter
+
+Converts `.bin` and CSV logs (files or whole directories) to candump format for
+CANExplorer, SavvyCAN and can-utils. See `docs/BINARY_LOGGING.md` for details.
+
+```bash
+python analysis/bin_to_candump.py "/Volumes/NO NAME" -d logs/candump
+python analysis/bin_to_candump.py logs/CAN_20261025_121704.bin -o tpms.log --clock-offset 31204.5
+```
+
+### cx_*.py - CANExplorer-based analysis
+
+Run in [CANExplorer](https://github.com/AKJ7/CANExplorer)'s environment
+(`uv run --project ~/Code/CANExplorer python -I analysis/cx_....py`) on candump logs:
+
+| Script | What it does |
+|--------|--------------|
+| `cx_fields.py LOGS -o DIR` | Per-ID checksums, counters, multiplexers and fields, one JSON per log |
+| `cx_consensus.py DIR --dbc X.dbc` | Fields found in most logs, matched by bits to reference DBC signals |
+| `cx_obdref.py LOGS` | Broadcast fields matching the logged OBD-II PID replies, with factor/offset |
+| `cx_markers.py LOG TIMES...` | Bits changing around marked moments, scored against chance |
+
+Findings and the full workflow are in `analysis/QUICK_REFERENCE.md`; confirmed
+signals go into `dbc/toyota_4runner_2018.dbc`.
+
 ---
 
 ### dbc_decode.py - DBC Signal Decoder
@@ -111,7 +136,8 @@ Advanced decoder that integrates Toyota 4Runner OBDb database for accurate signa
 **What it does:**
 - Loads signal definitions from Toyota 4Runner OBDb database
 - Decodes messages with proper scaling, offsets, and units
-- Currently decodes:
+- Currently decodes (built-in table; predates `dbc/toyota_4runner_2018.dbc`, which
+  has 0x1C4 as RPM, 0x2C1 as the gas pedal, 0x0B4 speed in bytes 5-6, and no RPM in 0x1D0):
   - 0x0AA - Wheel Speed (km/h, FR/FL/RR/RL, same formula as the firmware)
   - 0x0B4 - Vehicle Speed (km/h)
   - 0x1AA - Steering Angle (degrees)

@@ -1,0 +1,104 @@
+VERSION ""
+
+
+NS_ :
+    NS_DESC_
+    CM_
+    BA_DEF_
+    BA_
+    VAL_
+    CAT_DEF_
+    CAT_
+    FILTER
+    BA_DEF_DEF_
+    EV_DATA_
+    ENVVAR_DATA_
+    SGTYPE_
+    SGTYPE_VAL_
+    BA_DEF_SGTYPE_
+    BA_SGTYPE_
+    SIG_TYPE_REF_
+    VAL_TABLE_
+    SIG_GROUP_
+    SIG_VALTYPE_
+    SIGTYPE_VALTYPE_
+    BO_TX_BU_
+    BA_DEF_REL_
+    BA_REL_
+    SG_MUL_VAL_
+    BA_DEF_DEF_REL_
+    BU_SG_REL_
+    BU_EV_REL_
+    BU_BO_REL_
+    SG_REL_
+
+BS_:
+
+BU_: XXX
+
+BO_ 36 KINEMATICS: 8 XXX
+ SG_ YAW_RATE : 1|10@0+ (1,-512) [-512|511] "deg/s" XXX
+ SG_ STEERING_TORQUE : 17|10@0+ (1,-512) [-512|511] "" XXX
+ SG_ ACCEL_Y : 33|10@0+ (-0.002121,1.073352) [-1.1|1.1] "g" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 37 STEER_ANGLE_SENSOR: 8 XXX
+ SG_ STEER_ANGLE : 3|12@0- (1.5,0) [-3072|3070.5] "deg" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 170 WHEEL_SPEEDS: 8 XXX
+ SG_ WHEEL_SPEED_FR : 7|16@0+ (0.01,-67.67) [-67.67|587.68] "km/h" XXX
+ SG_ WHEEL_SPEED_FL : 23|16@0+ (0.01,-67.67) [-67.67|587.68] "km/h" XXX
+ SG_ WHEEL_SPEED_RR : 39|16@0+ (0.01,-67.67) [-67.67|587.68] "km/h" XXX
+ SG_ WHEEL_SPEED_RL : 55|16@0+ (0.01,-67.67) [-67.67|587.68] "km/h" XXX
+
+BO_ 180 SPEED: 8 XXX
+ SG_ SPEED : 47|16@0+ (0.01,0) [0|655.35] "km/h" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 452 ENGINE_RPM: 8 XXX
+ SG_ RPM : 7|16@0+ (0.78125,0) [0|51199.2] "rpm" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 464 MSG_1D0: 8 XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 548 BRAKE_MODULE: 8 XXX
+ SG_ BRAKE_PRESSED : 5|1@0+ (1,0) [0|1] "" XXX
+
+BO_ 567 MSG_237: 6 XXX
+ SG_ CHECKSUM : 47|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 705 GAS_PEDAL: 8 XXX
+ SG_ GAS_RELEASED : 3|1@0+ (1,0) [0|1] "" XXX
+ SG_ GAS_PEDAL : 55|8@0+ (0.005,0) [0|1.275] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 865 MSG_361: 8 XXX
+ SG_ THROTTLE_POSITION : 31|8@0+ (0.343,15.8) [15.8|103.27] "%" XXX
+
+BO_ 976 MSG_3D0: 1 XXX
+ SG_ VEHICLE_SPEED : 7|8@0+ (1,0) [0|255] "km/h" XXX
+
+BO_ 1176 MSG_498: 8 XXX
+ SG_ COOLANT_TEMP : 31|8@0+ (1.25,0) [0|318.75] "degC" XXX
+
+BO_ 1179 MSG_49B: 8 XXX
+ SG_ INTAKE_AIR_TEMP : 63|8@0+ (1.25,0) [0|318.75] "degC" XXX
+
+
+CM_ "2018 Toyota 4Runner, DLC3 (OBD port) CAN bus at 500 kbit/s. Built from CANExplorer's field analysis of 24 logs (Dec 2025 - Oct 2026): layouts matching opendbc's toyota_rav4_2017/highlander_2017 DBCs bit for bit, and fits against the OBD-II PID replies the firmware polls (analysis/cx_obdref.py). See analysis/QUICK_REFERENCE.md for evidence and open candidates.";
+CM_ SG_ 36 YAW_RATE "opendbc layout; deg/s scale as used by the firmware (KINEMATICS_*).";
+CM_ SG_ 36 STEERING_TORQUE "opendbc layout; opendbc doubts this is steering torque.";
+CM_ SG_ 36 ACCEL_Y "Lateral acceleration; firmware's fit against ABS PID 0x47: (raw - 512) * -0.002121 - 0.0126 g.";
+CM_ SG_ 36 CHECKSUM "Toyota checksum: (id_hi + id_lo + DLC + bytes 0..DLC-2) & 0xFF. Holds in every frame of every log for 0x024, 0x025, 0x0B4, 0x1C4, 0x1D0, 0x237 and 0x2C1.";
+CM_ SG_ 170 WHEEL_SPEED_FR "opendbc offset 67.67 reads exactly 0 at standstill (raw 6767); the firmware uses 6770, 0.03 km/h low.";
+CM_ SG_ 452 RPM "Fits OBD PID 0x0C with r = 1.000 in 5 logs; same scale as the firmware (25/32) and opendbc's ENGINE_RPM.";
+CM_ BO_ 464 "Not decoded; carries a Toyota checksum.";
+CM_ SG_ 548 BRAKE_PRESSED "opendbc layout; found as a flag in 20 of 24 logs.";
+CM_ BO_ 567 "Not decoded; carries a Toyota checksum.";
+CM_ SG_ 705 GAS_PEDAL "opendbc layout; 0 = released.";
+CM_ SG_ 865 THROTTLE_POSITION "Fit against OBD PID 0x11 (absolute throttle): r = 0.994-0.996 in 3 of 4 logs; the fourth matched byte 1 at r = 0.96.";
+CM_ SG_ 976 VEHICLE_SPEED "Fits OBD PID 0x0D with r = 1.000, factor 1.00, in 4 logs; leads the PID reply by ~0.2 s.";
+CM_ SG_ 1176 COOLANT_TEMP "Fit against OBD PID 0x05: factor 1.24-1.25, offset ~0, r = 0.998-1.000 in the two warm-up logs (2026-01-11, 2026-01-25). A zero offset is unusual for a temperature; check on a cold start.";
+CM_ SG_ 1179 INTAKE_AIR_TEMP "Fit against OBD PID 0x0F: factor 1.24-1.25, offset ~0, r = 0.97-0.999 in 3 logs, 0.89 in one. Same zero-offset caveat as COOLANT_TEMP.";

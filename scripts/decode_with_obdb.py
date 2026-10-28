@@ -20,58 +20,97 @@ class OBDbDecoder:
         self.obdb_data = None
         self.obdb_path = Path(obdb_path) if obdb_path else Path.home() / "Code/OBDb-Toyota-4Runner/signalsets/v3/default.json"
 
-        # Built-in passive broadcast definitions (listen-only, no OBD-II queries)
-        # Names and formulas are calibrated from the analysis summary
+        # Built-in passive broadcast definitions (listen-only, no OBD-II queries), mirroring
+        # dbc/toyota_4runner_2018.dbc; see analysis/QUICK_REFERENCE.md for the evidence.
+        # bix counts from the MSB of byte 0, so a DBC Motorola start bit b in byte n is
+        # bix = n * 8 + 7 - b % 8. Values are (raw + add) * mul / div.
         self.manual_can_ids = {
-            # Same decode as the firmware's handle_broadcast_wheel_speed(). Not TPMS: tire
-            # pressure is not on this bus (docs/TPMS_DECODING_NOTES.md).
+            0x024: {
+                "name": "Kinematics",
+                "signals": [
+                    {"name": "Yaw Rate", "bix": 6, "len": 10, "add": -512, "unit": "deg/s"},
+                    {"name": "Steering Torque", "bix": 22, "len": 10, "add": -512, "unit": "raw"},
+                    # (raw - 512) * -0.002121 - 0.0126, as in the firmware
+                    {"name": "Lateral G", "bix": 38, "len": 10, "add": -506.06, "mul": -0.002121, "unit": "g"},
+                ],
+                "source": "built-in",
+            },
+            0x025: {
+                "name": "Steering Angle Sensor",
+                "signals": [
+                    {"name": "Steering Angle", "bix": 4, "len": 12, "sign": True, "mul": 1.5, "unit": "degrees"},
+                ],
+                "source": "built-in",
+            },
+            # Not TPMS: tire pressure is not on this bus (docs/TPMS_DECODING_NOTES.md)
             0x0AA: {
                 "name": "Wheel Speed",
                 "signals": [
-                    {"name": "FR Speed", "bix": 0, "len": 16, "sign": True, "add": -6770, "div": 100, "unit": "km/h"},
-                    {"name": "FL Speed", "bix": 16, "len": 16, "sign": True, "add": -6770, "div": 100, "unit": "km/h"},
-                    {"name": "RR Speed", "bix": 32, "len": 16, "sign": True, "add": -6770, "div": 100, "unit": "km/h"},
-                    {"name": "RL Speed", "bix": 48, "len": 16, "sign": True, "add": -6770, "div": 100, "unit": "km/h"},
+                    {"name": "FR Speed", "bix": 0, "len": 16, "add": -6767, "div": 100, "unit": "km/h"},
+                    {"name": "FL Speed", "bix": 16, "len": 16, "add": -6767, "div": 100, "unit": "km/h"},
+                    {"name": "RR Speed", "bix": 32, "len": 16, "add": -6767, "div": 100, "unit": "km/h"},
+                    {"name": "RL Speed", "bix": 48, "len": 16, "add": -6767, "div": 100, "unit": "km/h"},
                 ],
                 "source": "built-in",
             },
             0x0B4: {
                 "name": "Vehicle Speed",
                 "signals": [
-                    {"name": "Speed", "bix": 0, "len": 16, "mul": 1.35, "unit": "km/h"},
-                ],
-                "source": "built-in",
-            },
-            0x1AA: {
-                "name": "Steering Angle",
-                "signals": [
-                    {"name": "Steering Angle", "bix": 0, "len": 16, "div": 10, "sign": True, "unit": "degrees"},
+                    {"name": "Speed", "bix": 40, "len": 16, "div": 100, "unit": "km/h"},
                 ],
                 "source": "built-in",
             },
             0x1C4: {
-                "name": "Throttle Position",
+                "name": "Engine RPM",
                 "signals": [
-                    {"name": "Throttle Position", "bix": 8, "len": 8, "div": 2.55, "unit": "%"},
+                    {"name": "RPM", "bix": 0, "len": 16, "mul": 0.78125, "unit": "rpm"},
                 ],
                 "source": "built-in",
             },
-            0x1D0: {
-                "name": "Engine RPM",
+            0x224: {
+                "name": "Brake Module",
                 "signals": [
-                    {"name": "RPM", "bix": 8, "len": 16, "div": 4, "unit": "rpm"},
+                    {"name": "Brake Pressed", "bix": 2, "len": 1, "unit": "bool"},
                 ],
                 "source": "built-in",
             },
             0x2C1: {
-                "name": "Engine Data",
+                "name": "Gas Pedal",
                 "signals": [
-                    {"name": "Coolant Temp", "bix": 0, "len": 8, "add": -40, "unit": "celsius"},
+                    {"name": "Gas Released", "bix": 4, "len": 1, "unit": "bool"},
+                    {"name": "Gas Pedal", "bix": 48, "len": 8, "mul": 0.005, "unit": "fraction"},
                 ],
                 "source": "built-in",
             },
-            # 0x4A7 / 0x498 were once decoded as TPMS; correlation against RF ground truth
-            # shows neither tracks tire pressure (docs/TPMS_DECODING_NOTES.md)
+            0x361: {
+                "name": "Throttle",
+                "signals": [
+                    # raw * 0.343 + 15.8, fitted against OBD PID 0x11
+                    {"name": "Throttle Position", "bix": 24, "len": 8, "add": 46.064, "mul": 0.343, "unit": "%"},
+                ],
+                "source": "built-in",
+            },
+            0x3D0: {
+                "name": "Vehicle Speed 2",
+                "signals": [
+                    {"name": "Speed", "bix": 0, "len": 8, "unit": "km/h"},
+                ],
+                "source": "built-in",
+            },
+            0x498: {
+                "name": "Engine Coolant",
+                "signals": [
+                    {"name": "Coolant Temp", "bix": 24, "len": 8, "mul": 1.25, "unit": "celsius"},
+                ],
+                "source": "built-in",
+            },
+            0x49B: {
+                "name": "Intake Air",
+                "signals": [
+                    {"name": "Intake Air Temp", "bix": 56, "len": 8, "mul": 1.25, "unit": "celsius"},
+                ],
+                "source": "built-in",
+            },
         }
 
         self.obdb_can_ids = {}
@@ -206,9 +245,11 @@ class OBDbDecoder:
         except Exception:
             return None
 
+        # Current CSVs name the payload columns b0-b7; the earliest firmware used byte0-byte7
+        prefix = 'b' if 'b0' in row else 'byte'
         data_bytes = []
         for i in range(8):
-            val = row.get(f'byte{i}', '').strip()
+            val = (row.get(f'{prefix}{i}') or '').strip()
             if val == '':
                 data_bytes.append(0)
                 continue
@@ -227,14 +268,18 @@ class OBDbDecoder:
         }
 
     def parse_bin_records(self):
-        """Parse binary log with fixed-size records"""
-        record_struct = struct.Struct('<QHB8B')
+        """Parse a CANBIN v1 log: 64-byte header, then 24-byte records (docs/BINARY_LOGGING.md)"""
+        record_struct = struct.Struct('<QIBB8BH')
         with open(self.log_file, 'rb') as f:
+            header = f.read(64)
+            if not header.startswith(b'CANBIN'):
+                print(f"❌ Error: not a CANBIN log: {self.log_file}")
+                return
             while True:
                 chunk = f.read(record_struct.size)
                 if len(chunk) < record_struct.size:
                     break
-                timestamp_us, can_id, dlc, *data_bytes = record_struct.unpack(chunk)
+                timestamp_us, can_id, dlc, _flags, *data_bytes, _reserved = record_struct.unpack(chunk)
                 yield {
                     'id': can_id,
                     'dlc': dlc,
@@ -335,7 +380,7 @@ class OBDbDecoder:
                 first_line = f.readline()
                 f.seek(0)
 
-                if first_line.lower().startswith('timestamp_us'):
+                if 'timestamp_us' in first_line.lower():
                     reader = csv.DictReader(f)
                     for row in reader:
                         msg = self.parse_csv_row(row)

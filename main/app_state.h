@@ -25,8 +25,7 @@ typedef struct {
     float vbatt_v;
     float iat_c;
     float ect_c;            // Engine coolant temp from OBD-II PID 0x05
-    float ect_broadcast_c;  // Engine coolant temp from broadcast 0x2C1
-    float ect_bcast_candidate_c;  // ECT broadcast candidate from 0x3BB byte 2
+    float ect_broadcast_c;  // Engine coolant temp from broadcast 0x498 byte 3
     float eot_c;            // Engine oil temp from Toyota PID 0x51
     float aat_c;            // Ambient air temp from OBD-II PID 0x46
     float baro_kpa;
@@ -53,20 +52,12 @@ typedef struct {
     // Broadcast RPM (from 0x1C4)
     float bcast_rpm_1c4;
     bool bcast_rpm_1c4_valid;
-    // Broadcast RPM test decodings (from 0x2C1)
-    float bcast_rpm_1;
-    float bcast_rpm_2;
-    float bcast_rpm_3;
-    float bcast_rpm_4;
-    bool bcast_rpm_valid;
     // Candidate raw bytes for broadcast IDs
     uint8_t cand_0b4_raw[8];
     uint8_t cand_1d0_raw[8];
-    uint8_t cand_2c1_raw[8];
     uint8_t cand_025_raw[8];
     bool cand_0b4_valid;
     bool cand_1d0_valid;
-    bool cand_2c1_valid;
     bool cand_025_valid;
     // Orientation data (from 0x7B0 PIDs 0x46 and 0x47)
     float lateral_g;
@@ -91,7 +82,6 @@ typedef struct {
     bool iat_valid;
     bool ect_valid;
     bool ect_broadcast_valid;
-    bool ect_bcast_candidate_valid;
     bool eot_valid;
     bool aat_valid;
     bool baro_valid;

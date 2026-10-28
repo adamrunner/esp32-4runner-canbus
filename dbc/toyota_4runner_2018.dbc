@@ -92,7 +92,7 @@ CM_ SG_ 36 YAW_RATE "opendbc layout; deg/s scale as used by the firmware (KINEMA
 CM_ SG_ 36 STEERING_TORQUE "opendbc layout; opendbc doubts this is steering torque.";
 CM_ SG_ 36 ACCEL_Y "Lateral acceleration; firmware's fit against ABS PID 0x47: (raw - 512) * -0.002121 - 0.0126 g.";
 CM_ SG_ 36 CHECKSUM "Toyota checksum: (id_hi + id_lo + DLC + bytes 0..DLC-2) & 0xFF. Holds in every frame of every log for 0x024, 0x025, 0x0B4, 0x1C4, 0x1D0, 0x237 and 0x2C1.";
-CM_ SG_ 170 WHEEL_SPEED_FR "opendbc offset 67.67 reads exactly 0 at standstill (raw 6767); the firmware uses 6770, 0.03 km/h low.";
+CM_ SG_ 170 WHEEL_SPEED_FR "opendbc offset 67.67: raw 6767 at standstill reads exactly 0.";
 CM_ SG_ 452 RPM "Fits OBD PID 0x0C with r = 1.000 in 5 logs; same scale as the firmware (25/32) and opendbc's ENGINE_RPM.";
 CM_ BO_ 464 "Not decoded; carries a Toyota checksum.";
 CM_ SG_ 548 BRAKE_PRESSED "opendbc layout; found as a flag in 20 of 24 logs.";

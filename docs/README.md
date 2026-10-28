@@ -111,14 +111,14 @@ evidence and open candidates are in
 |--------|-------------|---------|-----------|
 | 0x024 | Kinematics | Yaw rate (deg/s), Steering torque, Lateral G | Yes |
 | 0x025 | Steering Sensor | Steering angle (degrees) | Yes |
-| 0x0AA | Wheel Speed | FR, FL, RR, RL (km/h), (raw - 6767) / 100 | Yes (6770) |
+| 0x0AA | Wheel Speed | FR, FL, RR, RL (km/h), (raw - 6767) / 100 | Yes |
 | 0x0B4 | Vehicle Speed | Speed (km/h), bytes 5-6 / 100 | Yes |
 | 0x1C4 | Engine | RPM, bytes 0-1 * 25/32 | Yes |
 | 0x224 | Brake | Brake pressed | No |
-| 0x2C1 | Gas Pedal | Gas released, pedal position | No (firmware reads byte 0 as ECT; it is a constant, -32 C) |
+| 0x2C1 | Gas Pedal | Gas released, pedal position | No |
 | 0x361 | Engine | Throttle position (%) | No |
 | 0x3D0 | Vehicle Speed | Speed (km/h), byte 0 | No |
-| 0x498 | Engine | Coolant temp, byte 3 * 1.25 (C) | No (firmware shows 0x3BB b2 candidate) |
+| 0x498 | Engine | Coolant temp, byte 3 * 1.25 (C) | Yes |
 | 0x49B | Engine | Intake air temp, byte 7 * 1.25 (C) | No |
 
 ### OBD/Diagnostic Responses

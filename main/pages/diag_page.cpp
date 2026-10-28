@@ -26,7 +26,7 @@ typedef struct {
     lv_obj_t *vbatt_value;
     lv_obj_t *iat_value;
     lv_obj_t *ect_value;
-    lv_obj_t *ect_candidate_value;
+    lv_obj_t *ect_bcast_value;
     lv_obj_t *aat_value;
     lv_obj_t *page_counter;
     lv_obj_t *error_label;
@@ -115,7 +115,7 @@ static void diag_page_on_create(dm_page_t *page, lv_obj_t *parent)
     card = create_metric_card(grid, "ECT (C)", &data->ect_value);
     lv_obj_set_size(card, LV_PCT(23), 110);
 
-    card = create_metric_card(grid, "ECT 3BB (C)", &data->ect_candidate_value);
+    card = create_metric_card(grid, "ECT 498 (C)", &data->ect_bcast_value);
     lv_obj_set_size(card, LV_PCT(23), 110);
 
     card = create_metric_card(grid, "Ambient (C)", &data->aat_value);
@@ -230,12 +230,12 @@ static void diag_page_on_update(dm_page_t *page)
     }
     lv_label_set_text(data->ect_value, buf);
 
-    if (snap.ect_bcast_candidate_valid) {
-        snprintf(buf, sizeof(buf), "%.1f", snap.ect_bcast_candidate_c);
+    if (snap.ect_broadcast_valid) {
+        snprintf(buf, sizeof(buf), "%.1f", snap.ect_broadcast_c);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    lv_label_set_text(data->ect_candidate_value, buf);
+    lv_label_set_text(data->ect_bcast_value, buf);
 
     if (snap.aat_valid) {
         snprintf(buf, sizeof(buf), "%.1f", snap.aat_c);

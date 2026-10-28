@@ -76,7 +76,7 @@ static void log_lvgl_mem(const char *context)
 #define KINEMATICS_BROADCAST_ID_024 0x024
 #define GEAR_BROADCAST_ID_025 0x025  // DBC maps 0x025 to steering angle sensor
 #define RPM_BROADCAST_ID_1C4 0x1C4
-#define ECT_CAND_BROADCAST_ID_3BB 0x3BB
+#define ECT_BROADCAST_ID_498 0x498
 
 // Signal definitions for CAN ID 0x024 (Kinematics)
 // All signals are 10-bit with offset -512 (raw 0-1023 maps to -512 to +511)
@@ -93,7 +93,6 @@ static void log_lvgl_mem(const char *context)
 #define STEER_ANGLE_START_BIT         3
 #define STEER_ANGLE_LENGTH            12
 #define STEER_ANGLE_SCALE             1.5f
-#define RPM_TEST_BROADCAST_ID 0x2C1
 #define ORIENTATION_CAND_ID_1D0 0x1D0  // Gear candidate from correlation: byte 4
 #define CAN_LOGGER_RING_BUFFER_BYTES (4 * 1024 * 1024)  // 4 MB ring buffer (PSRAM)
 
@@ -366,7 +365,8 @@ static void handle_broadcast_wheel_speed(const twai_message_t *msg)
     uint16_t raw_rr = ((uint16_t)msg->data[4] << 8) | msg->data[5];
     uint16_t raw_rl = ((uint16_t)msg->data[6] << 8) | msg->data[7];
 
-    static const int16_t k_wheel_speed_offset = 6770;
+    // Raw 6767 at standstill (dbc/toyota_4runner_2018.dbc, same as opendbc)
+    static const int16_t k_wheel_speed_offset = 6767;
     m->bcast_wheel_fr_kph = ((int16_t)raw_fr - k_wheel_speed_offset) / 100.0f;
     m->bcast_wheel_fl_kph = ((int16_t)raw_fl - k_wheel_speed_offset) / 100.0f;
     m->bcast_wheel_rr_kph = ((int16_t)raw_rr - k_wheel_speed_offset) / 100.0f;
@@ -413,47 +413,20 @@ static void handle_broadcast_rpm_1c4(const twai_message_t *msg)
     metrics_unlock();
 }
 
-static void handle_broadcast_rpm_test(const twai_message_t *msg)
+static void handle_broadcast_ect_498(const twai_message_t *msg)
 {
-    if (msg->data_length_code < 8) {
+    if (msg->data_length_code < 4) {
         return;
     }
 
     metrics_lock();
     can_metrics_t *m = metrics_get_for_update();
 
-    m->bcast_rpm_1 = msg->data[2] * 8.0f;
-    m->bcast_rpm_2 = msg->data[4] * 8.0f;
-    m->bcast_rpm_3 = msg->data[7] * 8.0f;
-
-    uint16_t raw_16 = ((uint16_t)msg->data[5] << 8) | msg->data[4];
-    m->bcast_rpm_4 = raw_16 * 0.125f;
-
-    m->bcast_rpm_valid = true;
-    memcpy(m->cand_2c1_raw, msg->data, sizeof(m->cand_2c1_raw));
-    m->cand_2c1_valid = true;
-
-    // Engine coolant temperature from broadcast 0x2C1 byte 0
-    m->ect_broadcast_c = msg->data[0] - 40.0f;
+    // ECT from 0x498 byte 3: fits PID 0x05 at r = 1.000 with no offset and agrees within
+    // 0.75 C over 32-51 C (analysis/QUICK_REFERENCE.md). Not yet checked on a cold start.
+    static const float k_ect_scale = 1.25f;
+    m->ect_broadcast_c = msg->data[3] * k_ect_scale;
     m->ect_broadcast_valid = true;
-
-    metrics_unlock();
-}
-
-static void handle_broadcast_ect_candidate_3bb(const twai_message_t *msg)
-{
-    if (msg->data_length_code < 3) {
-        return;
-    }
-
-    metrics_lock();
-    can_metrics_t *m = metrics_get_for_update();
-
-    // Candidate ECT from 0x3BB byte 2, derived from OBD-II correlation.
-    static const float k_ect_scale = 0.51f;
-    static const float k_ect_offset = -1.7f;
-    m->ect_bcast_candidate_c = (msg->data[2] * k_ect_scale) + k_ect_offset;
-    m->ect_bcast_candidate_valid = true;
 
     metrics_unlock();
 }
@@ -735,13 +708,8 @@ static void process_obd_response(const twai_message_t *msg)
         return;
     }
 
-    if (msg->identifier == RPM_TEST_BROADCAST_ID) {
-        handle_broadcast_rpm_test(msg);
-        return;
-    }
-
-    if (msg->identifier == ECT_CAND_BROADCAST_ID_3BB) {
-        handle_broadcast_ect_candidate_3bb(msg);
+    if (msg->identifier == ECT_BROADCAST_ID_498) {
+        handle_broadcast_ect_498(msg);
         return;
     }
 

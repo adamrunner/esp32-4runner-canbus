@@ -136,14 +136,18 @@ Advanced decoder that integrates Toyota 4Runner OBDb database for accurate signa
 **What it does:**
 - Loads signal definitions from Toyota 4Runner OBDb database
 - Decodes messages with proper scaling, offsets, and units
-- Currently decodes (built-in table; predates `dbc/toyota_4runner_2018.dbc`, which
-  has 0x1C4 as RPM, 0x2C1 as the gas pedal, 0x0B4 speed in bytes 5-6, and no RPM in 0x1D0):
-  - 0x0AA - Wheel Speed (km/h, FR/FL/RR/RL, same formula as the firmware)
-  - 0x0B4 - Vehicle Speed (km/h)
-  - 0x1AA - Steering Angle (degrees)
-  - 0x1C4 - Throttle Position (%)
-  - 0x1D0 - Engine RPM (rpm)
-  - 0x2C1 - Engine Coolant Temperature (°C)
+- Reads `.bin` logs, both CSV layouts and serial captures
+- Currently decodes (built-in table, mirroring `dbc/toyota_4runner_2018.dbc`):
+  - 0x024 - Kinematics (yaw rate, steering torque, lateral G)
+  - 0x025 - Steering Angle (degrees)
+  - 0x0AA - Wheel Speed (km/h, FR/FL/RR/RL)
+  - 0x0B4, 0x3D0 - Vehicle Speed (km/h)
+  - 0x1C4 - Engine RPM (rpm)
+  - 0x224 - Brake pressed
+  - 0x2C1 - Gas released, gas pedal
+  - 0x361 - Throttle Position (%)
+  - 0x498 - Engine Coolant Temperature (°C)
+  - 0x49B - Intake Air Temperature (°C)
   - OBDb `rax` IDs - any response IDs present in `default.json`
 - Shows value ranges (min/max/avg) for signals
 - Exports decoded data to CSV with proper units

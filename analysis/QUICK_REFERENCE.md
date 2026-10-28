@@ -53,11 +53,11 @@ correlation searches.
 
 - `0x024` is not RPM and `0x025` is not gear (earlier priorities 1 and 2):
   they are kinematics and the steering angle sensor.
-- `0x1C4` is RPM, not throttle; `0x1D0` is not RPM. `scripts/decode_with_obdb.py`
-  still has the old assignments.
-- `0x2C1` byte 0 is a constant (8). The firmware's `ect_broadcast_c` decodes it
-  as coolant and shows -32 C.
+- `0x1C4` is RPM, not throttle; `0x1D0` is not RPM.
+- `0x2C1` byte 0 is a constant (8), not coolant; the firmware showed -32 C.
 - Coolant is `0x498` byte 3, not the `0x3BB` byte 2 candidate.
+
+The firmware and `scripts/decode_with_obdb.py` now follow the DBC.
 
 ---
 

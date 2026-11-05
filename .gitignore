@@ -13,6 +13,7 @@ tmp/
 
 # ESP-IDF build output
 build/
+build-5b/
 sdkconfig
 sdkconfig.old
 dependencies.lock

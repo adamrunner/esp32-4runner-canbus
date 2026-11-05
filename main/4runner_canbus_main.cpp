@@ -17,6 +17,7 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <sdkconfig.h>
 #include "display_manager.h"
 #include "display_manager/page.h"
 #include "lvgl.h"
@@ -119,6 +120,20 @@ static constexpr uint32_t k_ecu_ident_interval_ms = 250;
 #define CAN_TELEMETRY_INTERVAL_MS 2000
 
 // LCD Configuration
+// Panel size and timing differ per board; pins and the CH422G wiring are shared.
+#if CONFIG_BOARD_WAVESHARE_LCD_5B
+static const int lcd_h_res = 1024;
+static const int lcd_v_res = 600;
+static const int lcd_pixel_clock_hz = 21 * 1000 * 1000;
+static const int lcd_hsync_pulse_width = 30;
+static const int lcd_hsync_back_porch = 145;
+static const int lcd_hsync_front_porch = 170;
+static const int lcd_vsync_pulse_width = 2;
+static const int lcd_vsync_back_porch = 23;
+static const int lcd_vsync_front_porch = 12;
+static const int lcd_bounce_buffer_size_px = lcd_h_res * 10;
+static const int lcd_draw_buf_lines = 10;  // Bounce buffers take internal RAM from these
+#else
 static const int lcd_h_res = 800;
 static const int lcd_v_res = 480;
 static const int lcd_pixel_clock_hz = 16 * 1000 * 1000;
@@ -128,10 +143,12 @@ static const int lcd_hsync_front_porch = 8;
 static const int lcd_vsync_pulse_width = 4;
 static const int lcd_vsync_back_porch = 8;
 static const int lcd_vsync_front_porch = 8;
+static const int lcd_bounce_buffer_size_px = 0;
+static const int lcd_draw_buf_lines = 20;
+#endif
 static const int lcd_data_width = 16;
 static const int lcd_bits_per_pixel = 16;
 static const int lcd_num_fbs = 2;
-static const int lcd_bounce_buffer_size_px = 0;
 static const bool lcd_fb_in_psram = true;
 static const int lcd_hsync_io_num = GPIO_NUM_46;
 static const int lcd_vsync_io_num = GPIO_NUM_3;
@@ -1124,7 +1141,7 @@ extern "C" void app_main(void)
         .touch_reset_io_num = lcd_touch_reset_io_num,
         .touch_int_io_num = lcd_touch_int_io_num,
         .touch_enabled = true,
-        .draw_buf_lines = 20,
+        .draw_buf_lines = lcd_draw_buf_lines,
         .tick_period_ms = 2,
         .orientation = DISPLAY_ORIENTATION_LANDSCAPE,
         .x_offset = 0,

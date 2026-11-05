@@ -1,3 +1,21 @@
+menu "4Runner Display Board"
+
+    choice BOARD_MODEL
+        prompt "Waveshare board"
+        default BOARD_WAVESHARE_LCD_43B
+        help
+            Selects the panel resolution and RGB timing. Both boards share the same
+            pins and CH422G wiring.
+
+        config BOARD_WAVESHARE_LCD_43B
+            bool "ESP32-S3-Touch-LCD-4.3B (800x480)"
+
+        config BOARD_WAVESHARE_LCD_5B
+            bool "ESP32-S3-Touch-LCD-5B (1024x600)"
+    endchoice
+
+endmenu
+
 menu "Example Configuration"
 
     config EXAMPLE_TX_GPIO_NUM

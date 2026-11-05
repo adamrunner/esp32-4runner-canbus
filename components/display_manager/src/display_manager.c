@@ -341,7 +341,13 @@ display_manager_handle_t display_manager_init(const display_config_t *config)
     dm->display = lv_display_create(effective_h_res, effective_v_res);
 
     int draw_buf_lines = dm->config.draw_buf_lines > 0 ? dm->config.draw_buf_lines : 40;
-    size_t draw_buffer_sz = (size_t)effective_h_res * draw_buf_lines * sizeof(lv_color_t);
+    // Size for the RGB565 render format; lv_color_t is 3 bytes and would waste internal RAM.
+    size_t draw_buffer_sz = (size_t)effective_h_res * draw_buf_lines *
+                            lv_color_format_get_size(LV_COLOR_FORMAT_RGB565);
+    ESP_LOGI(TAG, "Draw buffers: 2 x %u bytes; DMA heap free %u, largest block %u",
+             (unsigned int)draw_buffer_sz,
+             (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned int)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     dm->draw_buf1 = heap_caps_malloc(draw_buffer_sz, MALLOC_CAP_DMA);
     assert(dm->draw_buf1);
     dm->draw_buf2 = heap_caps_malloc(draw_buffer_sz, MALLOC_CAP_DMA);

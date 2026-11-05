@@ -1,0 +1,4 @@
+# ESP32-S3-Touch-LCD-5B (1024x600). Layered on top of sdkconfig.defaults:
+#   idf.py -B build-5b -D SDKCONFIG=build-5b/sdkconfig \
+#     -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.5b" build
+CONFIG_BOARD_WAVESHARE_LCD_5B=y

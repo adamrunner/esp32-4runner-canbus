@@ -44,6 +44,7 @@ static const char *TAG = "rtc";
 
 // Control register 1 bits
 #define RTC_CTRL_1_CAP_SEL  0x01    // 12.5pF load capacitance
+#define RTC_SECONDS_OS_FLAG 0x80    // Oscillator stopped; time can't be trusted
 
 // Day of week names
 static const char *k_day_names[] = {
@@ -184,7 +185,8 @@ esp_err_t pcf_rtc_init(int i2c_port)
 
         if (!pcf_rtc_is_time_valid())
         {
-            ESP_LOGW(TAG, "RTC time not set (year < %d)", MIN_VALID_YEAR);
+            ESP_LOGW(TAG, "RTC time not valid (oscillator stopped or year < %d)",
+                     MIN_VALID_YEAR);
         }
     }
 
@@ -229,7 +231,18 @@ bool pcf_rtc_is_time_valid(void)
         return false;
     }
 
-    return time.year >= MIN_VALID_YEAR;
+    if (time.year < MIN_VALID_YEAR)
+    {
+        return false;
+    }
+
+    // Setting the time clears this flag, because the seconds write leaves bit 7 at 0.
+    uint8_t seconds = 0;
+    xSemaphoreTake(s_rtc.mutex, portMAX_DELAY);
+    esp_err_t err = pcf_read_bytes(RTC_SECOND_ADDR, &seconds, 1);
+    xSemaphoreGive(s_rtc.mutex);
+
+    return err == ESP_OK && (seconds & RTC_SECONDS_OS_FLAG) == 0;
 }
 
 esp_err_t pcf_rtc_get_time(pcf_datetime_t *time)
@@ -351,7 +364,7 @@ esp_err_t pcf_rtc_sync_system_time(void)
         return err;
     }
 
-    if (now.year < MIN_VALID_YEAR)
+    if (!pcf_rtc_is_time_valid())
     {
         ESP_LOGW(TAG, "RTC time not valid, skipping system time sync");
         return ESP_ERR_INVALID_STATE;

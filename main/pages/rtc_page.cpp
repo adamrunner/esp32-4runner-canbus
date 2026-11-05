@@ -246,7 +246,7 @@ static void rtc_page_on_create(dm_page_t *page, lv_obj_t *parent)
         return;
     }
 
-    data->page_index = 6;
+    data->page_index = display_manager_get_page_count(app_state_get_display()) - 1;
     s_rtc_page_data = data;
 
     // Initialize edit time from current RTC

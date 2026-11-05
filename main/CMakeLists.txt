@@ -1,5 +1,6 @@
 idf_component_register(SRCS "4runner_canbus_main.cpp"
                               "app_state.cpp"
+                              "hidden_features.cpp"
                               "page_utils.cpp"
                               "settings_store.cpp"
                               "pages/diag_page.cpp"

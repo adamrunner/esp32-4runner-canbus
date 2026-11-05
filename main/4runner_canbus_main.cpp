@@ -36,10 +36,7 @@
 #include "logging_page.h"
 #include "rpm_page.h"
 #include "orientation_page.h"
-#include "rtc_page.h"
-
-// The RTC page appears when the clock needs setting; set this to 1 to always show it.
-#define ALWAYS_SHOW_RTC_PAGE 0
+#include "hidden_features.h"
 
 static const char *TAG = "4RUNNER_CAN";
 
@@ -1265,12 +1262,10 @@ extern "C" void app_main(void)
     }
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    if (ALWAYS_SHOW_RTC_PAGE || (pcf_rtc_is_initialized() && !pcf_rtc_is_time_valid())) {
-        ESP_LOGI(TAG, "Creating rtc page...");
-        dm_page_t *rtc_settings_page = rtc_page_create();
-        if (rtc_settings_page) {
-            ESP_LOGI(TAG, "Adding rtc page...");
-            display_manager_add_page(display, rtc_settings_page);
+    // The RTC page is hidden unless the clock needs setting; holding a title also adds it.
+    if (pcf_rtc_is_initialized() && !pcf_rtc_is_time_valid()) {
+        ESP_LOGI(TAG, "Adding rtc page...");
+        if (hidden_features_add_rtc_page()) {
             page_count++;
             ESP_LOGI(TAG, "RTC page added, heap: %lu",
                      (unsigned long)esp_get_free_heap_size());

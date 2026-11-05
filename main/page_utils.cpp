@@ -4,6 +4,7 @@
 
 #include "page_utils.h"
 #include "app_state.h"
+#include "hidden_features.h"
 
 #include <stdio.h>
 
@@ -142,6 +143,7 @@ lv_obj_t *create_header_block(lv_obj_t *parent, const char *title, const char *s
     lv_obj_set_style_text_font(title_label, k_title_font, 0);
     lv_obj_set_style_text_color(title_label, k_text_color, 0);
     lv_obj_add_flag(title_label, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    hidden_features_attach_title(title_label);
 
     if (subtitle) {
         lv_obj_t *subtitle_label = lv_label_create(left);

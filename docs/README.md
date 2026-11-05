@@ -25,6 +25,12 @@ This project uses an ESP32-S3 microcontroller to passively listen to the CAN bus
 - ✅ Real-time kinematics decoding (yaw rate, lateral G, steering angle)
 - ✅ Vehicle speed, RPM, throttle, and more
 
+## Hidden Features
+
+Hold a page title for 2 seconds to add hidden pages to the rotation until the next reboot.
+Currently this is the RTC page, which also appears automatically when the clock needs setting.
+Add further hidden pages to `s_hidden_pages` in `main/hidden_features.cpp`.
+
 ## Quick Start
 
 ### 1. Capture CAN Data

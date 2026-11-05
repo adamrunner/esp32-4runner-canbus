@@ -12,6 +12,7 @@
 #include "lvgl.h"
 
 #include "app_state.h"
+#include "hidden_features.h"
 #include "page_utils.h"
 
 static const char *TAG = "rpm_page";
@@ -65,6 +66,7 @@ static void rpm_page_on_create(dm_page_t *page, lv_obj_t *parent)
     lv_obj_set_style_text_font(title_label, k_title_font, 0);
     lv_obj_set_style_text_color(title_label, k_text_color, 0);
     lv_obj_add_flag(title_label, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    hidden_features_attach_title(title_label);
 
     data->page_counter = lv_label_create(header);
     lv_label_set_text(data->page_counter, "6/6");
